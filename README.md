@@ -52,7 +52,7 @@ for page in pdfIn.pages:
 pdfOut.write()
 ```
 
-As you can see, we the code runs over pages, then over contents of every page, then uncompresses the contents, as it may be compressed, then parses the contents stream into a tree, removes the BT/ET text blocks, and then parses the resulting tree back to stream. The meaning of each line of code above should be clear apart from, possibly, the toArray lambda function: it's there because a page in PDF can have more the one Contents dictionary, in which case page.Contents is a PdfArray, and each of its elements has to be processed separately. And so, the toArray lambda function makes the situation with page contents more uniform by turning page.Contents that are not arrays into PdfArray with one element.
+As you can see, we the code runs over pages, then over contents of every page, then uncompresses the contents, as it may be compressed, then parses the contents stream into a tree, removes the BT/ET text blocks, and then parses the resulting tree back to stream. The meaning of each line of code above should be clear apart from, possibly, the toArray lambda function: it's there because a page in PDF can have more than one Contents dictionary, in which case page.Contents is a PdfArray, and each of its elements has to be processed separately. And so, the toArray lambda function makes the situation with page contents more uniform by turning page.Contents that are not arrays into PdfArray with one element.
 
 A few other things have to be noted as well. First, note that in order to acomplish the task the code uses just two new classes from _pdfrwx_: PdfFilter and PdfStream, which one/two function calls from each. Second, the parsed tree i just a nested standard Python list of the following trivial format:
 ```
