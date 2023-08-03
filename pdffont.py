@@ -265,7 +265,7 @@ class PdfFont:
 
     def install(self, pdfPage, fontName, overwrite=False):
         '''
-        Adds self.fontdict to the pdfPage.Resources.Font dictionary under the name fontName.
+        Adds self.font to the pdfPage.Resources.Font dictionary under the name fontName.
         The font can then be referred to using Tf operators in the pdfPage.stream
         '''
         if pdfPage.Resources == None: pdfPage.Resources = PdfDict()

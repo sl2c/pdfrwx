@@ -283,7 +283,7 @@ class PdfImage:
                 filter = 'DCTDecode'
             else:
                 pass
-                # msg('JPEG re-compressions skiped; ' + print_size_change(size, size_compressed))
+                # msg('JPEG re-compressions skipped; ' + print_size_change(size, size_compressed))
 
         # PDF expects inverted CMYK JPEGs
         if image.mode == 'CMYK' and filter == 'DCTDecode':
