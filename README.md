@@ -58,7 +58,7 @@ A few other things have to be noted as well. First, note that in order to acompl
 ```
 [
   ['q', []],
-  ['cm', ['1','0','0','1','0','0'],
+  ['cm', ['1','0','0','1','0','0']],
   ...
   ['BT', [], [ /a tree list of text operators/ ]],
   ...
