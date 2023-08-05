@@ -8,6 +8,7 @@ from pdfrw import PdfDict, PdfName, PdfArray
 from pdfrwx.common import err, msg, warn, chain
 from pdfrwx.pdffontencoding import PdfFontEncoding
 from pdfrwx.pdffontcmap import PdfFontCMap
+from pdfrwx.pdfobjects import PdfObjects
 
 # =========================================================================== class PdfFontGlyphMap
 
@@ -25,7 +26,7 @@ class PdfFontGlyphMap:
     DEX=1 # Digital or hex, like '12'
     HEX=2 # Hex, but not decimal, like '1F'
 
-    def __init__(self, glyphListPaths:list[str] = [], fonts:list[PdfDict] = [], knownPrefixes = {}):
+    def __init__(self, glyphListPaths:list[str] = [], fonts:PdfObjects = {}, knownPrefixes = {}):
         '''Initializes PdfFontGlyphMap by doing the following:
         
         * loads glyph map lists from the list of glyph list paths (1st argument)
@@ -57,7 +58,7 @@ class PdfFontGlyphMap:
                     self.glyphMap[PdfName(glyphName)] = PdfFontCMap.UTF16BE_to_Unicode_NEW(codePointHex)
 
         # train the composite_glyphname_to_cc() algo on glyph names from the fonts list
-        for font in [f for f in fonts if f.Subtype != '/Type0']:
+        for font in [f for f in fonts.values() if f.Subtype != '/Type0']:
             for gname in [g for g in PdfFontEncoding(font=font).glyphname2cc 
                             if PdfFontGlyphMap.strip_dot_endings(g) not in self.glyphMap]:
                 self.composite_glyphname_to_unicode(gname)

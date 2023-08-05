@@ -5,17 +5,17 @@ from pdfrw import PdfDict, PdfReader, PdfName
 # ============================================================================= PdfXObjects
 
 class PdfObjects(dict):
-    '''A utility class to store collections of objects. It is a dict that maps id(xobject) --> xobject.
+    '''A utility class to effectively create collections of objects such as images, fonts etc.
+    It is a dict that maps id(obj) --> obj.
+    You can add objects to the collection by calling either of the following:
     
-    The class is a map from id(fontDict) to fontDict that can be used to store font collections in a PDF.
-    You can add fonts to the collection by calling either of the following:
-    
-    * low-level function ```add(fontDict)```;
-    * medium-level function ```read(obj, filter)```, which will add objects from xobj's resources, as well as
-    in the resources of objects from the object's resources, recursively;
-    * high-level function ```read_all(pdf, filter)```, which will read all fonts from the PDF
+    * ```add(obj)``` -- ads an obj to the collection;
+    * ```read(obj, filter)```, add objects from obj's resources, as well as
+    objects from the objects' resources from the obj's resources, recursively;
+    * ```read_all(pdf, filter)```, which will read all fonts from the PDF
 
-    The several pre-defined filter are provided by the class.
+    The type of objects you gather is defined by the filter.
+    Several pre-defined filter are provided by the class.
 
     An xobject can be also added to the collection directly using self.add(xobject).
     '''
@@ -34,9 +34,10 @@ class PdfObjects(dict):
         '''
         self[id(obj)] = obj
 
-    def read(self, obj:PdfDict, filter = 'PdfObjects'.objFilter):
+    def read(self, obj:PdfDict, filter = 'PdfObjects.objFilter'):
         '''
-        Recursively appends images contained in PDF dictionary's Resources to the collection
+        Add objects from obj's resources, as well as objects from the objects' resources
+        from the obj's resources, recursively.
         '''
         res = obj.inheritable.Resources
         if res == None: return
@@ -50,9 +51,10 @@ class PdfObjects(dict):
                 self[id(xobj)] = xobj
             if type == '/XObject': self.read(xobj,filter)
 
-    def read_all(self, pdf:PdfReader, filter = 'PdfObjects'.objFilter):
+    def read_all(self, pdf:PdfReader, filter = 'PdfObjects.objFilter'):
         '''
-        Read all fronts from the pdf.
+        Read all objects from the pdf, recursively; this just calls self.read(page, filter) on every
+        page from pdf.pages.
         '''
         for page in pdf.pages:
             self.read(page, filter)
