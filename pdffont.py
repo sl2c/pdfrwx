@@ -318,7 +318,7 @@ class PdfFont:
         Encodes a text string as a PdfTextString; this actually produces a PDF hex/literal string
         depending on the value of self.is_cid().
         '''
-        return PdfTextString(self.cmap.encode(s), toFormat = 'hex' if self.is_cid() else 'literal')
+        return PdfTextString.from_codes(self.cmap.encode(s), forceCID=self.is_cid())
 
     def width(self, s:str, isEncoded = False):
         '''
@@ -550,7 +550,7 @@ class PdfFontUtils:
 
     # --------------------------------------------------------------------- make_t1_font_dict()
 
-    def make_t1_font_dict(fontFilePath:str):
+    def make_t1FontDict_from_PFB(pdfFontFilePath:str):
         '''
         '''
         from fontTools.t1Lib import T1Font, findEncryptedChunks
@@ -558,7 +558,7 @@ class PdfFontUtils:
         from fontTools.pens.basePen import NullPen
         pen = NullPen()
 
-        font = T1Font(fontFilePath)
+        font = T1Font(pdfFontFilePath)
         # print('Parse()')
         font.parse()
         
@@ -575,9 +575,7 @@ class PdfFontUtils:
 
 
         chars = font.font["CharStrings"]
-        # print('Draw()')
         for char in chars.values(): char.draw(pen) # This initializes char.width-s
-        # print('Done')
 
         widths = [chars[name].width for name in font.font["Encoding"]]
         encoding = [0] + [PdfName(name) for name in font.font["Encoding"]]
@@ -589,16 +587,16 @@ class PdfFontUtils:
         # This is required by PDF, but one might as well just set flags=32
         # The bits (from the 1st bit up):
         # FixedPitch,Serif,Symbolic,Script,0,Nonsymbolic,Italic,0,0,0,0,0,0,0,0,0,AllCap,SmallCap,ForceBold
-        flags = 32 # This is just the symbolic/nonsymbol bits set (their XOR should always be 1)
+        flags = 32 # This is just the pair of symbolic/non-symbolic bits setting (their XOR should always be 1)
         if isFixedPitch: flags += 1
         # if info.get('SerifStyle',0): flags += 2
         if italicAngle: flags += 64
 
         lengths = []
-        with open(fontFilePath,'rb') as f:
+        with open(pdfFontFilePath,'rb') as f:
             for n in range(3):
                 assert f.read(1) == b'\x80'
-                code = f.read(1)
+                assert f.read(1) in [b'\x01', b'\x02']
                 l = int.from_bytes(f.read(4), 'little')
                 lengths.append(l)
                 f.seek(f.tell() + l)
@@ -616,7 +614,7 @@ class PdfFontUtils:
             Widths = PdfArray(widths),
             Encoding = PdfDict(
                 Type = PdfName.Encoding,
-                BaseEncoding = PdfName.WinAnsiEncoding,
+                # BaseEncoding = PdfName.WinAnsiEncoding,
                 Differences = PdfArray(encoding)
             ),
 
@@ -642,9 +640,9 @@ class PdfFontUtils:
 
         return fontDict
 
-    def save_t1_font(font:PdfDict, filePath:str):
+    def save_t1FontDict_as_PFB(font:PdfDict, filePath:str):
         '''
-        Saves Type 1 font to file (PFB file format).
+        Saves Type 1 font dictionary to file (PFB file format).
         '''
         import struct
         ff = PdfFilter.uncompress(font.FontDescriptor.FontFile)
@@ -653,9 +651,10 @@ class PdfFontUtils:
         # if int(ff.Length3) == 0:
         #     data += b'0'*512 + b'cleartomark\n{restore}if\n'
 
-        for _ in range(8):
-            data += b'0' * 64 + b'\n'
-        data += b"cleartomark" + b"%%EndResource" + b"%%EOF"
+        if int(ff.Length3) == 0:
+            for _ in range(8):
+                data += b'0' * 64 + b'\n'
+            data += b"cleartomark\n"
 
         # l1, l2, l3 = int(ff.Length1), int(ff.Length2), int(ff.Length2)
         # data = b'\x08\x01' + struct.pack('<L',l1) + data[:l1] \
@@ -796,25 +795,53 @@ class PdfFontUtils:
 
 if __name__ == '__main__':
 
-    from pdfrw import PdfWriter
-    from pdfrwx.pdffontglyphmap import PdfFontGlyphMap
+    helpMessage='''\
+pdffont.py -- embed/extract fonts into/from PDF
 
-    page = PdfDict(Type=PdfName.Page, MediaBox=[0,0,200,200], Contents=IndirectPdfDict())
+Usage:
+pdffont.py font.pfb -- produces font.pdf which shows the font table
+pdffont.py doc.pdf -- extracts all embedded fonts as pfb files
+'''
 
-    # fontDict = PdfFontCore14.make_core14_font('/Times-Roman')
-    fontDict = PdfFontUtils.make_t1_font_dict('./cmr10')
-    # print('fontDict: ',fontDict)
-    font = PdfFont(fontDict, PdfFontGlyphMap())
-    # print(f'font: {font}')
-    font.install(page, 'F1')
-    # print(page)
-    # text='''Hello…'''
-    text='''Hello, World!'''
-    encodedString = font.encode(text)
-    print("encoded string:", [encodedString])
-    page.Contents.stream = f'BT 10 50 Td /F1 10 Tf {encodedString} Tj ET'
+    import sys
+    from os.path import splitext
+    from pdfrw import PdfReader, PdfWriter
+    # from pdfrwx.pdffontglyphmap import PdfFontGlyphMap
 
-    pdf = PdfWriter('hello.pdf')
-    pdf.addPage(page)
 
-    pdf.write()
+    if len(sys.argv) == 1:
+        sys.exit(helpMessage)
+
+    filePath = sys.argv[1]
+    root, ext = splitext(filePath)
+
+    if ext.tolower() == '.pfb':
+        fontDict = PdfFontUtils.make_t1FontDict_from_PFB(filePath)
+        pdf = PdfWriter(root + '.pdf')
+        pdf.addPage(PdfFont(fontDict).fontTableToPdfPage())
+        pdf.write()
+    
+    if ext.tolower() == '.pdf':
+        pdf = PdfReader('filePath')
+        
+
+
+    # page = PdfDict(Type=PdfName.Page, MediaBox=[0,0,200,200], Contents=IndirectPdfDict())
+    # # fontDict = PdfFontCore14.make_core14_font('/Times-Roman')
+    # fontDict = PdfFontUtils.make_t1FontDict_from_PFB('./cmr10.pfb')
+    # # print('fontDict: ',fontDict)
+    # font = PdfFont(fontDict, PdfFontGlyphMap())
+    # # print(f'font: {font}')
+    # font.install(page, 'F1')
+    # # print(page)
+    # # text='''Hello…'''
+    # text='''Hello, World!'''
+    # pdfString = font.encodePdfTextString(text)
+    # print("encoded string:", [pdfString])
+    # page.Contents.stream = f'BT 10 50 Td /F1 10 Tf {pdfString} Tj ET'
+
+    # pdf = PdfWriter('hello.pdf')
+    # pdf.addPage(page)
+
+    # pdf.write()
+

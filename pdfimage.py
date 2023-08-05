@@ -915,7 +915,7 @@ if __name__ == '__main__':
 
     import re,os
     from pdfrw import PdfReader,PdfWriter
-    from pdfrwx.pdfxobjects import PdfXObjects
+    from pdfobjects import PdfXObjects
 
     if len(sys.argv) == 1: print(helpMessage); sys.exit() 
     for arg in sys.argv[1:]:
