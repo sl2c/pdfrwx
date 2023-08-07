@@ -7,9 +7,8 @@ from pdfrw import PdfDict, PdfReader, PdfName
 class PdfObjects(dict):
     '''A utility class to effectively create collections of objects such as images, fonts etc.
     It is a dict that maps id(obj) --> obj.
-    You can add objects to the collection by calling either of the following:
+    You can add objects to the collection by calling:
     
-    * ```add(obj)``` -- ads an obj to the collection;
     * ```read(obj, filter)```, add objects from obj's resources, as well as
     objects from the objects' resources from the obj's resources, recursively;
     * ```read_all(pdf, filter)```, which will read all fonts from the PDF
@@ -19,37 +18,30 @@ class PdfObjects(dict):
 
     An xobject can be also added to the collection directly using self.add(xobject).
     '''
+    objFilter           = lambda name,xobj: xobj.Type == PdfName.XObject
+    imageFilter         = lambda name,xobj: xobj.Subtype == PdfName.Image
+    formFilter          = lambda name,xobj: xobj.Subtype == PdfName.Form
 
-    objFilter           = (PdfName.XObject, lambda name,xobj: True)
-    imageFilter         = (PdfName.XObject, lambda name,xobj: xobj.Subtype == PdfName.Image)
-    formFilter          = (PdfName.XObject, lambda name,xobj: xobj.Subtype == PdfName.Form)
-
-    fontFilter          = (PdfName.Font,    lambda name,xobj: True)
-    fontType1Filter     = (PdfName.Font,    lambda name,xobj: xobj.Subtype == PdfName.Type1)
-    fontType3Filter     = (PdfName.Font,    lambda name,xobj: xobj.Subtype == PdfName.Type3)
-
-    def add(self, obj:PdfDict):
-        '''
-        Does this: self[id(xobject)] = xobject
-        '''
-        self[id(obj)] = obj
+    fontFilter          = lambda name,xobj: xobj.Type == PdfName.Font
+    fontType1Filter     = lambda name,xobj: xobj.Subtype == PdfName.Type1
+    fontType3Filter     = lambda name,xobj: xobj.Subtype == PdfName.Type3
 
     def read(self, obj:PdfDict, filter = 'PdfObjects.objFilter'):
         '''
         Add objects from obj's resources, as well as objects from the objects' resources
         from the obj's resources, recursively.
         '''
-        res = obj.inheritable.Resources
-        if res == None: return
+        Resources = obj.inheritable.Resources
+        if Resources == None: return
 
-        type, func = filter
-        if type not in ['/XObject', '/Font']: raise ValueError(f'invalid filter: {filter}')
-
-        res = res[type]
-        for name, xobj in res.items():
-            if func(name,xobj):
-                self[id(xobj)] = xobj
-            if type == '/XObject': self.read(xobj,filter)
+        # The resource will run over /XObject, /Font, /ExtGState & other dictionaries
+        for resource in Resources.values():
+            if not isinstance(resource, PdfDict): continue
+            for name, xobj in resource.items():
+                if isinstance(xobj, PdfDict):
+                    if filter(name, xobj):
+                        self[id(xobj)] = xobj
+                    self.read(xobj,filter)
 
     def read_all(self, pdf:PdfReader, filter = 'PdfObjects.objFilter'):
         '''

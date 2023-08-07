@@ -15,7 +15,7 @@ from pdfrwx.pdffilter import PdfFilter
 
 # ================================================== class PdfTextString
 
-class PdfTextString(PdfString):
+class PdfTextString(str):
 
     '''
     This is an adaptation of the PdfString class — which is part of pdfrw, and represents
@@ -44,6 +44,9 @@ class PdfTextString(PdfString):
     code strings represented by the Python str class. In this representation, there's a one-to-one
     correspondence between the chars of the string and the character codes, code == ord(char),
     and so len(code_string) exactly equals the number of character codes in it.
+
+    UPD: We now overload the .from_bytes() function as it turns out that the pdfrw version has a bug;
+    see function's help for more info.
     '''
 
     def format(self):
@@ -63,9 +66,61 @@ class PdfTextString(PdfString):
             raise ValueError(f'format should be one of: auto, hex, literal')
         isCID = any(ord(c)>255 for c in codeString) or forceCID
         suitableFormat = 'hex' if isCID else 'literal'
-        format = format if format != 'auto' else suitableFormat # Do not let PdfString decide on the format
+        format = format if format != 'auto' else suitableFormat # Do not let from_bytes() decide on the format
         bytes = codeString.encode('utf-16-be' if isCID else 'latin1')
-        return cls(PdfString.from_bytes(bytes, bytes_encoding=format))
+        return cls.from_bytes(bytes, bytes_encoding=format)
+    
+    def to_bytes(self):
+        '''
+        Converts a PDF string to bytes
+        '''
+        format = self.format()
+        if format == None: raise ValueError(f'invalid PDF string: {self}')
+        s = self[1:-1]
+
+        if format == 'hex':
+            try: return bytes.fromhex(s)
+            except: raise ValueError(f'invalid PDF hex string: {self}')
+
+        if format == 'literal':
+            # Normalize a PDF literal string according to specs (see PDF Ref sec. 3.2.3)
+            s = re.sub(r'\r\n','\n',s) # any end-of-line marker not preceded by backslash is equivalent to \n
+            s = re.sub(r'\r','\n',s) # any end-of-line marker not preceded by backslash is equivalent to \n
+            s = re.sub(r'\\\n','',s) # a combination of backslash followed by any end-of-line marker is ignored (=no new line)
+            s = re.sub(r'(?<!\\)\\(?![nrtbf()\\0-7])','', s) # if \ is not foll-d by a special char & not prec-d by \ ignore it
+            s = s.replace('\\(','(').replace('\\)',')')
+
+            # First encode() creates bytes, then decode() interprets escapes contained in bytes
+            # (latin1 encoding used in the first step translate the escapes literally)
+            try: return s.encode('latin1').decode('unicode-escape').encode('latin1')
+            except: raise ValueError(f'invalid PDF literal string: {self}')
+
+    @classmethod
+    def from_bytes(cls, raw:bytes, bytes_encoding='auto'):
+        '''
+        Overload the buggy PdfString.from_bytes() from pdfrw, which outputs \\r unescaped which makes it
+        identical to \\n according to PDF Ref. (Acrobat interprets it as \\n too).
+        We escape all chars outside the 32..126 code range (yes, we escape b'\\x7f').
+        '''
+        if bytes_encoding not in ('hex', 'literal', 'auto'):
+            raise ValueError(f'Invalid bytes_encoding value: {bytes_encoding}')
+
+        # Keep the 'minimum encoded string size' logic in the 'auto' mode for compatibility
+        force_hex = bytes_encoding == 'hex'
+        if bytes_encoding == 'auto' and len(re.split(br'(\(|\\|\))', raw)) // 2 >= len(raw):
+            force_hex = True
+
+        if force_hex:
+            # Keep the pdfrw logic: "The spec does not mandate uppercase, but it seems to be the convention."
+            result = raw.hex().upper()
+        else:
+            # Encode a PDF literal string according to specs (see PDF Ref sec. 3.2.3)
+            specialChars = {'\n':'\\n', '\r':'\\r', '\t':'\\t', '\b':'\\b', '\f':'\\f',
+                            '(':'\\(', ')':'\\)', '\\':'\\\\'}
+            escapedString = [c if c not in specialChars else specialChars[c] for c in raw.decode('latin1')]
+            result = '(' + ''.join(escapedString) + ')'
+
+        return cls(result)
         
 # class PdfTextString(str):
 #     '''
@@ -215,7 +270,7 @@ class PdfFont:
     ```
     '''
 
-    __fontsCache = {} # a map from id(fontDict) to its consecutive number; needed to number unnamed Type3 fonts
+    __fontNameCache = {} # a map from id(fontDict) to its consecutive number; needed to number unnamed Type3 fonts
 
     def __init__(self, fontDict:PdfDict, glyphMap:PdfFontGlyphMap = PdfFontGlyphMap()):
         '''
@@ -228,16 +283,7 @@ class PdfFont:
         self.glyphMap = glyphMap
 
         # set name
-        f = self.font
-        self.name = f.Name if f.Subtype == '/Type3' \
-            else f.DescendantFonts[0].BaseFont if f.Subtype == '/Type0' and f.DescendantFonts != None \
-            else f.BaseFont
-        if self.name == None and f.Subtype == '/Type3':
-            getN = lambda d, k: d.get(k) or d.update({k:len(d)+1}) or len(d) # update always returns (for k hashable)
-            N = getN(self.__fontsCache,id(f))
-            self.name = f'/T3Font{N}'
-        if self.name == None:
-            self.name = '/NoName'
+        self.name = self.get_font_name()
 
         # Set encoding
         self.encoding = PdfFontEncoding(font = self.font) if not self.is_cid() else None
@@ -262,6 +308,24 @@ class PdfFont:
 
         # spaceWidth
         self.spaceWidth = self.width(' ')
+
+    def get_font_name(self):
+        '''
+        Returns N + 1, where N is the number of times this function was called previously
+        with arguments, whose .Name was identical to the f.Name of the current argument.
+        '''
+        nDuplicates = lambda d, k: d.get(k) or d.update({k:len(d)+1}) or len(d) # duplicates counter
+        f = self.font
+
+        if f.Name not in self.__fontNameCache: self.__fontNameCache[f.Name] = {}
+        idx = nDuplicates(self.__fontNameCache[f.Name], id(f))
+
+        result = f.Name if f.Subtype == '/Type3' \
+            else f.DescendantFonts[0].BaseFont if f.Subtype == '/Type0' and f.DescendantFonts != None \
+            else f.BaseFont
+
+        return result + (f'-v{idx}' if idx > 1 and not PdfFontCore14.standard_fontname(result) else '') \
+                if result != None else ('/T3Font' if f.Subtype == '/Type3' else '/NoName') + f'{idx}'
 
     def install(self, pdfPage, fontName, overwrite=False):
         '''
@@ -593,17 +657,15 @@ class PdfFontUtils:
         if italicAngle: flags += 64
 
         lengths = []
+        fontProgram = b''
         with open(pdfFontFilePath,'rb') as f:
             for n in range(3):
                 assert f.read(1) == b'\x80'
                 assert f.read(1) in [b'\x01', b'\x02']
                 l = int.from_bytes(f.read(4), 'little')
                 lengths.append(l)
-                f.seek(f.tell() + l)
+                fontProgram += f.read(l)
             assert f.read(2) == b'\x80\x03'                
-
-            f.seek(0)
-            fontProgram = f.read()
 
         fontDict = IndirectPdfDict(
             Type = PdfName.Font,
@@ -800,14 +862,15 @@ pdffont.py -- embed/extract fonts into/from PDF
 
 Usage:
 pdffont.py font.pfb -- produces font.pdf which shows the font table
-pdffont.py doc.pdf -- extracts all embedded fonts as pfb files
+pdffont.py doc.pdf -- extracts all embedded Type1 fonts as pfb files
 '''
 
     import sys
     from os.path import splitext
     from pdfrw import PdfReader, PdfWriter
-    # from pdfrwx.pdffontglyphmap import PdfFontGlyphMap
 
+    from pdfrwx.pdfobjects import PdfObjects
+    from pprint import pprint
 
     if len(sys.argv) == 1:
         sys.exit(helpMessage)
@@ -815,15 +878,19 @@ pdffont.py doc.pdf -- extracts all embedded fonts as pfb files
     filePath = sys.argv[1]
     root, ext = splitext(filePath)
 
-    if ext.tolower() == '.pfb':
+    if ext.lower() == '.pfb':
         fontDict = PdfFontUtils.make_t1FontDict_from_PFB(filePath)
         pdf = PdfWriter(root + '.pdf')
         pdf.addPage(PdfFont(fontDict).fontTableToPdfPage())
         pdf.write()
     
-    if ext.tolower() == '.pdf':
-        pdf = PdfReader('filePath')
-        
+    if ext.lower() == '.pdf':
+        pdf = PdfReader(filePath)
+        fonts = PdfObjects()
+        fonts.read_all(pdf, PdfObjects.fontType1Filter)
+        for font in fonts.values():
+            if font.FontDescriptor == None: continue
+            PdfFontUtils.save_t1FontDict_as_PFB(font, root + '-' + font.BaseFont[1:] + '.pfb')
 
 
     # page = PdfDict(Type=PdfName.Page, MediaBox=[0,0,200,200], Contents=IndirectPdfDict())

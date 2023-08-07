@@ -31,7 +31,7 @@ class PdfState:
 
         fontName = None, # current font name (the key in Resources.Font, set by the Tf command)
         fontSize = None, # current font size (set by the Tf command)
-        font = None, # current font (PdfDict) (Resources.Font[fontName])
+        font = None, # current font: PdfFont(Resources.Font[fontName])
         ```
         '''
         self.__stack = []

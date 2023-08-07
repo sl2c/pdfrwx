@@ -206,6 +206,7 @@ class PdfStream:
         If textOnly==True only the text and state operators are parsed, i.e. the bare minimum that allows to
         to extract full text–related information from the stream.
         '''
+        assert isinstance(stream, str)
         lexer, parser = PdfStreamLexer(), PdfStreamParser()
         tokens = lexer.tokenize(stream)
         if textOnly:

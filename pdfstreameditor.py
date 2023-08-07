@@ -45,7 +45,9 @@ class PdfStreamEditor:
         self.debug = debug
 
         # Parse the stream tree
-        self.tree = PdfStream.stream_to_tree(self.get_stream(), textOnly, graphicsOnly)
+        stream = self.get_stream()
+        if stream == None: stream = ''
+        self.tree = PdfStream.stream_to_tree(stream, textOnly, graphicsOnly)
         if normalize:
             self.tree = self.normalize_text_operators(self.tree)
 
@@ -208,7 +210,7 @@ class PdfStreamEditor:
                     outText += f"Text: {[cmdText]}\n"
                 if cmd == 'Tf':
                     cs = state.current_state
-                    outText += f'SetFont: {[cs.Font.font.name, cs.Font.fontSize]}\n'
+                    outText += f'SetFont: {[cs.font.name, cs.fontSize]}\n'
             else:
                 outText += cmdText if cmdText != None else ''
 
