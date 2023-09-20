@@ -52,20 +52,20 @@ for page in pdfIn.pages:
 pdfOut.write()
 ```
 
-As you can see, we the code runs over pages, then over contents of every page, then uncompresses the contents, as it may be compressed, then parses the contents stream into a tree, removes the BT/ET text blocks, and then parses the resulting tree back to stream. The meaning of each line of code above should be clear apart from, possibly, the toArray lambda function: it's there because a page in PDF can have more the one Contents dictionary, in which case page.Contents is a PdfArray, and each of its elements has to be processed separately. And so, the toArray lambda function makes the situation with page contents more uniform by turning page.Contents that are not arrays into PdfArray with one element.
+As you can see, the code runs over pages, then over contents of every page, then uncompresses the contents, as it may be compressed, then parses the contents stream into a tree, removes the BT/ET text blocks, and then parses the resulting tree back to stream. The meaning of each line of code above should be clear apart from, possibly, the toArray lambda function: it's there because a page in PDF can have more than one Contents dictionary, in which case page.Contents is a PdfArray, and each of its elements has to be processed separately. And so, the toArray lambda function makes the situation with page contents more uniform by turning page.Contents that are not arrays into PdfArray with one element.
 
-A few other things have to be noted as well. First, note that in order to acomplish the task the code uses just two new classes from _pdfrwx_: PdfFilter and PdfStream, which one/two function calls from each. Second, the parsed tree i just a nested standard Python list of the following trivial format:
+A few other things have to be noted as well. First, note that in order to acomplish the task the code uses just two new classes from _pdfrwx_: PdfFilter and PdfStream, with one/two function calls from each. Second, the parsed tree i just a nested standard Python list of the following trivial format:
 ```
 [
   ['q', []],
-  ['cm', ['1','0','0','1','0','0'],
+  ['cm', ['1','0','0','1','0','0']],
   ...
   ['BT', [], [ /a tree list of text operators/ ]],
   ...
   ['Q', []]
 ]
 ```
-So, each leaf (element) of the tree list is itself a list of 2 or 3 elements: the first two elements are the command and the list of arguments (an empty list if the command has no arguments), while the third optional argument is present in the case where the leaf is a block of commands, in which case it is the tree list of the commands that make up the block. By design, there's just one type of block: the BT/ET text block, which uses the name 'BT' in the parsed tree. Note, that in the original PDF stream there's a sequence of commands; it is the PdfStream parse that creates these blocks its output for convenience. To further familiarize themselves with the structure of the output of the stream parser, try inserting a command like pprint(treeIn) right after the call to the parser.
+So, each leaf (element) of the tree list is itself a list of 2 or 3 elements: the first two elements are the command and the list of arguments (an empty list if the command has no arguments), while the third optional argument is present in the case where the leaf is a block of commands, in which case it is the tree list of the commands that make up the block. By design, there are just two types of blocks: the BT/ET text block, which uses command name 'BT' in the parsed tree, and the BI/ID/EI inline image block, which uses the command name 'BI' in the parsed tree. Note, that in the original PDF stream there's just a sequence of commands; it is the PdfStream parser that creates these blocks in its output for convenience. To further familiarize yourself with the structure of the output of the stream parser, try inserting a command like pprint(treeIn) right after the call to the parser.
 
 Note also that the _toArray_ function, however useful, has _not_ been implemented in the module, and so you have to code it every time you do the parsing. This may sound strange, but it's the result of the same design principles: the module just parses the stream; its up to the developer to code everything else.
 
