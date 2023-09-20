@@ -425,10 +425,13 @@ class PdfImage:
                 if bpc == 16:
                     warn('16 --> 8 image bit depth reduction')
                     array = (array // 256).astype('uint8')
+                    bpc = 8
                 if bpc != 1:
                     stream = array.tobytes()
 
-            if cs.mode not in ['1','L','P','RGB','CMYK']: warn(f'unsupported color space: {cs.name}'); return None
+            if cs.mode not in ['1','L','P','RGB','CMYK']:
+                warn(f'unsupported color space: {cs.name}, mode: {cs.mode}')
+                return None
             img = Image.frombytes(cs.mode, (width,height), stream, 'raw')
 
         # Insert palette
@@ -437,12 +440,17 @@ class PdfImage:
             img.putpalette(cs.palette)
 
         # Adjust colors: process the /Decode attribute and CMYK JPEGs (need to be processed together)
-        if adjustColors and not indexedDecodeChecked:
+        if adjustColors and not indexedDecodeChecked and cs.name not in ['/Separation', '/DeviceN']:
             decode = [float(x) for x in obj.Decode] if obj.Decode != None else None
+
+            # This assumes that /DCTDecode in combination with 4-component /ICCBased or /DeviceN
+            # color spaces uses inverted CMYK colors, just like with /DeviceCMYK; probably so;
+            # For all such color spaces, cs.mode will be 'CMYK'
             cmyk_jpeg = img.mode == 'CMYK' and img.format == 'JPEG'
 
-
-            vMax = 2 ** bpc - 1 if cs.palette != None else 1
+            if cs.palette != None: err('cs.palette != None') # This is needed for more testing
+            iMax = 2 ** bpc - 1
+            vMax = iMax if cs.palette != None else 1
             # print("DECODE:", decode, cs)
             decode_is_trivial = decode == None or decode == [c for _ in range(len(decode)//2) for c in (0,vMax)]
             decode_is_inverted = decode != None and decode == [c for _ in range(len(decode)//2) for c in (vMax,0)]
@@ -464,8 +472,8 @@ class PdfImage:
                         components_new = []
                         for n,c in enumerate(components):
                             d1,d2 = decode[n*2: n*2 + 2]
-                            a = np.array(c).astype('int32')
-                            a = d1 + (a * (d2 - d1))//255               # THIS IS PROBABLY WRONG !!!!!!!!!!!!
+                            a = np.array(c).astype('float')
+                            a = (iMax * d1 + a * (d2 - d1))/vMax
                             a = np.clip(a, 0, 255).astype('uint8')
                             components_new.append(Image.fromarray(a, mode='L'))
                         img = Image.merge(img.mode, components_new)
@@ -689,24 +697,23 @@ class PdfImage:
 
     # -------------------------------------------------------------------- compress_image_xobject()
 
-    def compress_image_xobject(image_obj:IndirectPdfDict, pdfPage = None, \
-        jpegQuality = 'keep', downsample = False, forceRGB = False, applyIntent = False):
+    def compress_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:PdfDict):
 
         # A lambda for printing out size changes in the form old_size --> new size (+-change%)
         print_size_change = lambda size_old, size_new: \
             f'Size: {size_old} --> {size_new} ({((size_new - size_old)*100)//size_old:+d}%)'
 
-        if forceRGB:
+        if options.forceRGB:
             # This produces RGBA if there are masks
-            msg('Processing image and masks together as an aimage with transparency')
+            msg('Processing image and masks together as an image with transparency')
             msg('Image decoding started')
-            img = PdfImage.decode(image_obj, pdfPage, adjustColors = True, applyMasks = True, applyIntent = applyIntent)
+            img = PdfImage.decode(image_obj, pdfPage, adjustColors = True, applyMasks = True, applyIntent = options.applyIntent)
             msg('Image decoding ended')
         else:
             # Decode the image and store the masks (if any) separately
             msg('Processing image and masks separately')
             msg('Image decoding started')
-            img = PdfImage.decode(image_obj, pdfPage, adjustColors = True, applyMasks = False, applyIntent = applyIntent)
+            img = PdfImage.decode(image_obj, pdfPage, adjustColors = True, applyMasks = False, applyIntent = options.applyIntent)
             msg('Image decoding ended')
 
         if img == None: warn(f'Failed to decode image'); return
@@ -714,12 +721,26 @@ class PdfImage:
 
         obj_masks = [image_obj.Mask, image_obj.SMask]
 
-        # Downsample
-        if downsample:
-            msg(f'Downsampling image')
+        # Force CMYK --> RGB, if requested (unless CMYK is actually /DeviceN)
+        if options.forceRGB and img.mode == 'CMYK' and cs.name != '/DeviceN':
+            intent = image_obj.Intent if options.applyIntent else None
+            msg(f'Forcing {img.mode} --> RGB with rendering intent: {intent}')
+            img = ImageUtils.pil_image_to_srgb(img, intent)
+            if 'icc_profile' in img.info: del img.info['icc_profile']
+
+        # if options.gray and img.mode not in ['L', '1'] and cs.name not in ['/Separation','/DeviceN']:
+        if options.gray and img.mode not in ['L', '1']:
+            msg(f'Conversion {img.mode} --> L')
+            img = img.convert('L')
+            if 'icc_profile' in img.info: del img.info['icc_profile']
+
+        # Resizing
+        if options.resize:
+            f = options.resize
+            msg(f'Resizing image by factor {f}')
             w,h = img.size
-            img = img.resize(((w+1)//2, (h+1)//2))
-            if not forceRGB:
+            img = img.resize((int((w+0.5/f)*f), int((h+0.5/f)*f)))
+            if not options.forceRGB:
                 obj_masks_downsampled = []
                 for obj_mask in obj_masks:
                     if obj_mask == None: obj_masks_downsampled.append(None); continue
@@ -732,22 +753,22 @@ class PdfImage:
                     msg(f'Mask mode: {mask.mode}')
                     Matte = obj_mask.Matte
                     msg('Mask encoding started')
-                    obj_mask,_ = PdfImage.encode(mask, jpegQuality if mask.mode == 'L' else 'keep')
+                    obj_mask,_ = PdfImage.encode(mask, options.compressionQuality if mask.mode == 'L' else 'keep')
                     msg('Mask encoding ended')
                     obj_mask.Matte = Matte
                     obj_masks_downsampled.append(obj_mask)
                 obj_masks = obj_masks_downsampled
 
-        # Force CMYK --> RGB, if requested (unless CMYK is actually /DeviceN)
-        if forceRGB and img.mode == 'CMYK' and cs.name != '/DeviceN':
-            intent = image_obj.Intent if applyIntent else None
-            msg(f'Forcing {img.mode} --> RGB with rendering intent: {intent}')
-            img = ImageUtils.pil_image_to_srgb(img, intent)
+        # if options.bitonal and img.mode != '1' and cs.name not in ['/Separation','/DeviceN']:
+        if options.bitonal and img.mode != '1':
+            msg(f'Conversion {img.mode} --> 1')
+            img = img.convert('1', dither=Image.Dither.NONE)
             if 'icc_profile' in img.info: del img.info['icc_profile']
+
 
         # Convert PIL image to a PDF Image XObject and compress it with jpegQuality (if it's != 'keep')
         msg('Image encoding started')
-        image_obj_new,_ = PdfImage.encode(img, jpegQuality)
+        image_obj_new,_ = PdfImage.encode(img, options.compressionQuality)
         msg('Image encoding ended')
 
         # Correct /ColorSpace and /Decode for /DeviceN and /Separation color spaces
@@ -757,7 +778,7 @@ class PdfImage:
             image_obj_new.Decode = image_obj.Decode
 
         # Put masks back in
-        if not forceRGB:
+        if not options.forceRGB:
             image_obj_new.Mask, image_obj_new.SMask = obj_masks
         
         # Preserve /Intent
@@ -902,12 +923,18 @@ if __name__ == '__main__':
 
     pdfPath = None
     imagePaths = []
-    dpi = None
-    compress = False
-    compressionQuality = 90
-    downsample = False
-    forceRGB = False
-    applyIntent = False
+
+    options = PdfDict(
+        dpi = None,
+        compress = False,
+        compressionQuality = 90,
+        resize = None,
+        gray = False,
+        bitonal = False,
+        forceRGB = False,
+        applyIntent = False
+    )
+
     firstPage,lastPage = 1,-1
 
     LINE_SINGLE = '-'*64
@@ -915,7 +942,7 @@ if __name__ == '__main__':
 
     import re,os
     from pdfrw import PdfReader,PdfWriter
-    from pdfobjects import PdfXObjects
+    from pdfobjects import PdfObjects
 
     if len(sys.argv) == 1: print(helpMessage); sys.exit() 
     for arg in sys.argv[1:]:
@@ -926,20 +953,23 @@ if __name__ == '__main__':
             if key == '-f': firstPage = int(value)
             if key == '-l': lastPage = int(value)
             if key == '-compress':
-                compress = True
-                if value != None: compressionQuality=int(value)
-            if key == '-downsample':
-                downsample = True
+                options.compress = True
+                options.compressionQuality='keep' if value == 'keep' else int(value) if value != None else 90
+            if key == '-resize':
+                options.resize = float(value)
+            if key == '-gray':
+                options.gray = True
+            if key == '-bitonal':
+                options.bitonal = True
             if key == '-rgb':
-                forceRGB = True
+                options.forceRGB = True
             if key == '-intent':
-                applyIntent = True
+                options.applyIntent = True
             if key == '-dpi':
-                try: dpi = float(value); dpi = (dpi,dpi)
+                try: options.dpi = float(value); dpi = (dpi,dpi)
                 except: err(f'invalid dpi: {dpi}')
         else:
             imagePaths.append(arg)
-
 
     if len(imagePaths) == 0: err("No PDF or images files given, nothing to do")
 
@@ -957,10 +987,8 @@ if __name__ == '__main__':
         for pageNo in range(firstPage,lastPage+1):
 
             page = pdf.pages[pageNo-1]
-            images = PdfXObjects()
-            imageFilter = lambda name,xobj: xobj.Subtype == PdfName.Image
-
-            images.read(page, imageFilter)
+            images = PdfObjects()
+            images.read(page, PdfObjects.imageFilter)
 
             print(f'Page {pageNo}, read {len(images)} images')
             print(f'Page.Resources.ColorSpace:', page.Resources.ColorSpace if page.Resources != None else None)
@@ -973,11 +1001,9 @@ if __name__ == '__main__':
                 print(LINE_SINGLE)
 
                 # ---------- Compress images ----------
-                if compress or downsample or forceRGB:
-                    
-                    pageArg = page if forceRGB else None
-                    jpegQuality = compressionQuality if compress else 'keep'
-                    PdfImage.compress_image_xobject(obj, pageArg, jpegQuality, downsample, forceRGB, applyIntent)
+                if options.compress:
+                    pageArg = page if options.forceRGB else None
+                    PdfImage.compress_image_xobject(obj, pageArg, options)
                     print(LINE_SINGLE)
                     print("RESULT:")
                     pprint(obj)
@@ -985,11 +1011,11 @@ if __name__ == '__main__':
                 # ---------- Extract images ----------
                 else:
 
-                    image = PdfImage.decode(obj,page, adjustColors = True, applyMasks = True, applyIntent = applyIntent)
+                    image = PdfImage.decode(obj,page, adjustColors = True, applyMasks = True, applyIntent = options.applyIntent)
                     if image == None: warn('failed to extract image; continuing'); continue
                     print(image.format, image.mode)
                     if image == None: warn(f'failed to decode image'); continue
-                    dpi = dpi if dpi != None else image.info.get('dpi') if image.info.get('dpi') != None else (72,72)
+                    dpi = options.dpi if options.dpi != None else image.info.get('dpi') if image.info.get('dpi') != None else (72,72)
                     icc_profile = image.info.get('icc_profile')
 
                     # Save images
@@ -1003,7 +1029,7 @@ if __name__ == '__main__':
                     else:
                         image.save(outputPath, dpi=dpi, icc_profile=icc_profile, compression=tiff_compression)
 
-        if compress or downsample or forceRGB:
+        if options.compress:
             pdfOutPath = fileBase + '-compressed' + fileExt
             print(LINE_DOUBLE)
             print(f'Writing output to {pdfOutPath}')

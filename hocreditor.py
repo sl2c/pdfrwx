@@ -28,7 +28,7 @@ from pdfrwx.common import err,warn,eprint
 
 class hocrEditor:
 
-    def __init__(self, pdf:PdfReader, debug=False):
+    def __init__(self, pdf:PdfReader, defaultUnicodeFont:str, defaultFontDir:str, debug=False):
         self.pdf = pdf
         self.pdfPage = None
         self.stream = ''

@@ -210,7 +210,7 @@ class PdfStreamEditor:
                     outText += f"Text: {[cmdText]}\n"
                 if cmd == 'Tf':
                     cs = state.current_state
-                    outText += f'SetFont: {[cs.font.name, cs.fontSize]}\n'
+                    outText += f'SetFont: {[cs.font.name, cs.fontSize, cs.font.spaceWidth]}\n'
             else:
                 outText += cmdText if cmdText != None else ''
 
@@ -220,6 +220,8 @@ class PdfStreamEditor:
                 if xobj.Subtype == PdfName.Form and xobj.stream != None:
                     doText, _, _ = xobjCache[id(xobj)]
                     outText += doText
+                    if self.debug:
+                        outText += f'doText: {[doText]}'
 
             # Process the nested BT/ET block a recursive call on the body
             if cmd == 'BT':
@@ -231,6 +233,8 @@ class PdfStreamEditor:
                         any(len(kid[1])>1 and (kid[0],kid[1][0]) == ('Tf','/OCR') for kid in leaf[2])
                     if discardText or discardOCR:
                         print(f'Removed text: {blockText}'); isModified = True
+                        body = [l for l in leaf[2] if l[0] not in ['Tj', 'TJ', '"', "'"]]
+                        outTree.append(['BT',[],body])
                     else:
                         outTree.append(leaf)
             else:

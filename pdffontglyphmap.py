@@ -88,7 +88,8 @@ class PdfFontGlyphMap:
         if prefix not in self.prefix_types or suffix_t > self.prefix_types[prefix]:
             self.prefix_types[prefix] = suffix_t
 
-        return chr(int(suffix,16) if self.prefix_types[prefix] == self.HEX else int(suffix))
+        i = int(suffix,16) if self.prefix_types[prefix] == self.HEX else int(suffix)
+        return chr(i) if i <= PdfFontCMap.UNICODE_BMP_MAX else None
 
     # --------------------------------------------------------------------------- make_cmap()
 

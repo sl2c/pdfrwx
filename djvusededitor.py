@@ -14,6 +14,7 @@ from pdfrwx.common import err,msg,warn,eprint, encapsulate
 from pdfrwx.pdffont import PdfFont, PdfFontUtils, PdfTextString
 from pdfrwx.pdffontencoding import PdfFontEncoding
 from pdfrwx.pdfstreamparser import PdfStream
+from pdfrwx.pdfstreameditor import PdfStreamEditor
 from pdfrwx.djvusedparser import DjVuSedLexer, DjVuSedParser
 from pdfrwx.pdfstate import PdfState
 from pdfrwx.pdffontglyphmap import PdfFontGlyphMap
@@ -74,7 +75,7 @@ class DjVuSedEditor:
                 textNormalized = self.unicodeToDjvuSedString(text) # This extends djvused format to allow Unicode strings
                 textUnicode = self.djvuSedStringToUnicode(textNormalized)
                 if len(textUnicode) == 0: continue
-                hexString = font.encode(textUnicode)
+                pdfString = font.encodePdfTextString(textUnicode)
                 stringWidth = font.width(textUnicode)
 
                 scale_x = int(round(font.scaleFactor*(float(xmax)-float(xmin))/stringWidth))
@@ -85,7 +86,7 @@ class DjVuSedEditor:
                 if scale_y == None: scale_y = int(ymin)-int(ymax)
 
                 # stream += f'BT /OCR {fontsize_new} Tf {xmin} {baseline_y:.1f} Td {invisible}{hexString} Tj ET\n'
-                stream += f'{scale_x} 0 0 {scale_y} {xmin} {baseline_y} Tm {hexString} Tj\n'
+                stream += f'{scale_x} 0 0 {scale_y} {xmin} {baseline_y} Tm {pdfString} Tj\n'
 
                 # if len(textUnicode)>=5: fontsize = fontsize_new
 
@@ -102,11 +103,12 @@ class DjVuSedEditor:
         # return stream, fontsize
         return stream
 
-    def insert_ocr(self, pdf:PdfReader, firstPage = 1, debug = False):
+    def insert_ocr(self, pdf:PdfReader, defaultUnicodeFont:str, defaultFontDir:str, firstPage = 1, debug = False):
 
         # One font, many pages
         utils = PdfFontUtils()
         font = utils.loadFont([defaultUnicodeFont], ['.',defaultFontDir])
+        xobjCache = {}
 
         # Run over pages in the djvusedTree
         for djvusedPage in self.tree:
@@ -125,10 +127,8 @@ class DjVuSedEditor:
             stream = ''.join(PdfFilter.uncompress(c).stream for c in encapsulate(pdfPage.contents))
             resources = pdfPage.inheritable.Resources
             if resources == None: resources = PdfDict(); pdfPage.Resources = resources
-            pdfEditor = PdfStreamEditor(stream, resources, PdfFontGlyphMap())
-            pdfEditor.tree = pdfEditor.parse_stream()
-            isModified, pdfEditor.tree = pdfEditor.remove_text(pdfEditor.tree, '', {}, True, debug)
-            if isModified: pdfPage.Contents = IndirectPdfDict(stream = PdfStream.tree_to_stream(pdfEditor.tree))
+            pdfEditor = PdfStreamEditor(pdfPage, PdfFontGlyphMap())
+            pdfEditor.processText(xobjCache=xobjCache, options={'removeOCR':True})
 
             djvusedPageCommands = djvusedPage[2:]
             ocrStream = None

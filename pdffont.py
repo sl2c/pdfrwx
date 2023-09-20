@@ -112,7 +112,7 @@ class PdfTextString(str):
 
         if force_hex:
             # Keep the pdfrw logic: "The spec does not mandate uppercase, but it seems to be the convention."
-            result = raw.hex().upper()
+            result = '<' + raw.hex().upper() + '>'
         else:
             # Encode a PDF literal string according to specs (see PDF Ref sec. 3.2.3)
             specialChars = {'\n':'\\n', '\r':'\\r', '\t':'\\t', '\b':'\\b', '\f':'\\f',
@@ -306,8 +306,9 @@ class PdfFont:
                 # infer cmap based on the mappings from glyph names to unicodes
                 self.cmap = self.glyphMap.make_cmap(self.encoding)
 
-        # spaceWidth
+        # spaceWidth; this is only needed to put space breaks in text: see class PdfState
         self.spaceWidth = self.width(' ')
+        if self.spaceWidth == 0: self.spaceWidth = self.widthDefault * self.scaleFactor
 
     def get_font_name(self):
         '''
@@ -317,12 +318,12 @@ class PdfFont:
         nDuplicates = lambda d, k: d.get(k) or d.update({k:len(d)+1}) or len(d) # duplicates counter
         f = self.font
 
-        if f.Name not in self.__fontNameCache: self.__fontNameCache[f.Name] = {}
-        idx = nDuplicates(self.__fontNameCache[f.Name], id(f))
-
         result = f.Name if f.Subtype == '/Type3' \
             else f.DescendantFonts[0].BaseFont if f.Subtype == '/Type0' and f.DescendantFonts != None \
             else f.BaseFont
+
+        if result not in self.__fontNameCache: self.__fontNameCache[result] = {}
+        idx = nDuplicates(self.__fontNameCache[result], id(f))
 
         return result + (f'-v{idx}' if idx > 1 and not PdfFontCore14.standard_fontname(result) else '') \
                 if result != None else ('/T3Font' if f.Subtype == '/Type3' else '/NoName') + f'{idx}'
@@ -706,27 +707,16 @@ class PdfFontUtils:
         '''
         Saves Type 1 font dictionary to file (PFB file format).
         '''
-        import struct
         ff = PdfFilter.uncompress(font.FontDescriptor.FontFile)
         data = py23_diffs.convert_store(ff.stream)
-
-        # if int(ff.Length3) == 0:
-        #     data += b'0'*512 + b'cleartomark\n{restore}if\n'
 
         if int(ff.Length3) == 0:
             for _ in range(8):
                 data += b'0' * 64 + b'\n'
             data += b"cleartomark\n"
 
-        # l1, l2, l3 = int(ff.Length1), int(ff.Length2), int(ff.Length2)
-        # data = b'\x08\x01' + struct.pack('<L',l1) + data[:l1] \
-        #     + b'\x08\x02' + struct.pack('<L',l2) + data[l1:l1 + l2] \
-        #     + b'\x08\x01' + struct.pack('<L',l2) + data[l1+l2:l1+l2+l3] \
-        #     + b'\x08\x03'
         from fontTools.t1Lib import writePFB
         writePFB(filePath, data)
-        # with open(filePath, 'wb') as f:
-        #     f.write(data)
 
     # --------------------------------------------------------------------- make_cid_font_dict()
 
