@@ -42,7 +42,7 @@ class PdfColorSpace(PdfDict):
         self.palette:bytes
         self.palette_cs:PdfColorSpace
         ```
-        The first tree are always set, the rest are set depending on the particular color space.
+        The first three are always set, the rest are set depending on the particular color space.
 
         '''
         super().__init__(**kwargs)
@@ -440,7 +440,10 @@ class PdfImage:
             img.putpalette(cs.palette)
 
         # Adjust colors: process the /Decode attribute and CMYK JPEGs (need to be processed together)
-        if adjustColors and not indexedDecodeChecked and cs.name not in ['/Separation', '/DeviceN']:
+        if adjustColors and not indexedDecodeChecked \
+                and cs.name not in ['/Separation', '/DeviceN', None] \
+                and cs.palette == None:
+
             decode = [float(x) for x in obj.Decode] if obj.Decode != None else None
 
             # This assumes that /DCTDecode in combination with 4-component /ICCBased or /DeviceN
@@ -448,7 +451,7 @@ class PdfImage:
             # For all such color spaces, cs.mode will be 'CMYK'
             cmyk_jpeg = img.mode == 'CMYK' and img.format == 'JPEG'
 
-            if cs.palette != None: err('cs.palette != None') # This is needed for more testing
+            if cs.palette != None: err('cs.palette != None; this case needs more testing')
             iMax = 2 ** bpc - 1
             vMax = iMax if cs.palette != None else 1
             # print("DECODE:", decode, cs)
@@ -923,6 +926,7 @@ if __name__ == '__main__':
 
     pdfPath = None
     imagePaths = []
+    dpi = None
 
     options = PdfDict(
         dpi = None,
@@ -966,7 +970,7 @@ if __name__ == '__main__':
             if key == '-intent':
                 options.applyIntent = True
             if key == '-dpi':
-                try: options.dpi = float(value); dpi = (dpi,dpi)
+                try: options.dpi = float(value); dpi = (options.dpi,options.dpi)
                 except: err(f'invalid dpi: {dpi}')
         else:
             imagePaths.append(arg)

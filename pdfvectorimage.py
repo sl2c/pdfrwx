@@ -22,7 +22,7 @@ class PdfVectorImage:
         '''
         if obj == None or obj.Subtype != PdfName.Image: return False
         image = PdfImage.decode(obj)
-        if image.mode != '1': return False
+        if image == None or image.mode != '1': return False
 
         mask = np.array(image)
         mask = np.flipud(mask) # flip upside down since images use inverted coordinate system

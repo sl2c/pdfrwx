@@ -289,8 +289,19 @@ class PdfFont:
         self.encoding = PdfFontEncoding(font = self.font) if not self.is_cid() else None
 
         # Set widths
-        self.cc2width, self.widthDefault = self.make_cc2width()
+        self.cc2width, self.widthMissing, self.widthAverage = self.make_cc2width()
         self.scaleFactor = 1
+
+        # Set fontMatrix
+        self.fontMatrix = [float(x) for x in self.font.FontMatrix] if self.font.FontMatrix != None \
+                            else [0.001, 0, 0, 0.001, 0, 0]
+        
+        # Set font's bounding box
+        if self.font.Subtype == '/Type3':
+            self.bbox = self.get_type3_bbox()
+        else:
+            try: self.bbox = [float(x) for x in self.font.FontDescriptor.FontBBox]
+            except: self.bbox = [0, 0, 1000, 1000]
 
         # Set cmap
         try: # /ToUnicode may be junk
@@ -303,12 +314,12 @@ class PdfFont:
                 # !!! REWRITE: add handling of CID encodings (beyond Identity-H) !!!
                 self.cmap = PdfFontCMap(identity=True)
             else:
-                # infer cmap based on the mappings from glyph names to unicodes
+                # infer cmap based on the mappings from glyph names to Unicode points
                 self.cmap = self.glyphMap.make_cmap(self.encoding)
 
         # spaceWidth; this is only needed to put space breaks in text: see class PdfState
-        self.spaceWidth = self.width(' ')
-        if self.spaceWidth == 0: self.spaceWidth = self.widthDefault * self.scaleFactor
+        self.spaceWidth = self.width(' ') if ' ' in self.cmap.unicode2cc \
+            else self.widthAverage * self.scaleFactor
 
     def get_font_name(self):
         '''
@@ -390,20 +401,17 @@ class PdfFont:
         Returns the width of string if typeset with self.font. 
         '''
         if not isEncoded: s = self.cmap.encode(s)
-        width = lambda cc: self.cc2width[cc] if cc in self.cc2width else self.widthDefault
-        width = sum(width(cc) for cc in s) * self.scaleFactor
-        return width
+        widthFunc = lambda cc: self.cc2width[cc] if cc in self.cc2width else self.widthMissing
+        return sum(widthFunc(cc) for cc in s) * self.scaleFactor
 
     def make_cc2width(self):
         '''
-        Returns a tuple (cc2width, defaultWidth) where cc2width is a map of character codes (cc, as char) to widths,
-        and defaultWidth is the average width of the non-zero-width chars which can be used to calculate a width
-        of a char if its width is not available.
+        Returns a tuple (cc2width, missingWidth, averageWidth) where cc2width is a map of character codes (cc, as char) to widths.
+        NB: the widths are in document units, not the font units.
         '''
         cc2width = {}
         font = self.font
         if font == None: return None
-        defaultWidth = None
 
         if font.Subtype in ['/Type1','/Type3','/TrueType']:
 
@@ -425,9 +433,10 @@ class PdfFont:
                                 for cc in range(first, min(last+1, first+len(font.Widths)))}
 
             # Set defaultWidth
-            if font.FontDescriptor != None: defaultWidth = font.FontDescriptor.MissingWidth
-            if defaultWidth != None: defaultWidth = float(defaultWidth)
-            if font.Subtype == '/Type3': defaultWidth = 0
+            missingWidth = 0 if font.Subtype == '/Type3' \
+                else float(font.FontDescriptor.MissingWidth) \
+                    if font.FontDescriptor != None and font.FontDescriptor.MissingWidth != None \
+                else 0
 
         elif font.Subtype == '/Type0':
 
@@ -451,21 +460,21 @@ class PdfFont:
                     start, end, chunk = None, None, None
 
             # Set defaultWidth
-            if dFont.DW != None: defaultWidth = float(dFont.DW)
+            missingWidth = float(dFont.DW) if dFont.DW != None else 0
 
         else:
             raise ValueError(f'unrecognized font type: {font}')
 
-        # Rescale to document units
+        # Rescale from font units to to document units
         z = abs(float(self.font.FontMatrix[0])) if self.font.FontMatrix != None else 0.001
         cc2width = {cc: w*z for cc,w in cc2width.items()}
-        if defaultWidth != None:
-            defaultWidth *= z
-        else:
-            w = [v for v in cc2width.values() if v != 0]
-            defaultWidth = sum(w)/ len(w) if len(w) > 0 else 1
- 
-        return cc2width, defaultWidth
+        # Get averageWidth
+        w = [v for v in cc2width.values() if v != 0]
+        averageWidth = sum(w)/ len(w) if len(w) > 0 else 1
+        # Rescale missingWidth
+        missingWidth *= z
+
+        return cc2width, missingWidth, averageWidth
 
     def __str__(self):
         '''
@@ -491,13 +500,6 @@ class PdfFont:
 
         fs = 14 # Font size
 
-        fm = self.font.FontMatrix
-        fm_scale = abs(float(fm[0])) if fm != None else 0.001
-        invert = fm != None and float(fm[3]) < 0
-        type = self.font.Subtype
-        scale = 1 if type != '/Type3' else t3scale if t3scale != 'auto' \
-                    else 1/(fm_scale * self.get_type3_bbox()[2])
-     
         # print(encoding.map)
         page = PdfDict(
             Type = PdfName.Page,
@@ -516,8 +518,12 @@ class PdfFont:
         for row in range(16):
             stream += f'1 0 0 1 -20 {-10*(2*row) + 2} Tm ({legend[row]}) Tj\n'
 
+        scale = 1 if self.font.Subtype != '/Type3' else t3scale if t3scale != 'auto' \
+                    else 1/(abs(self.fontMatrix[0]) * abs(self.bbox[2] - self.bbox[0]))
+
         stream += f'/F {fs*scale:f} Tf\n'
 
+        invert = self.fontMatrix[3] < 0
         for row in range(16):
             # dx = fs*1 if row % 2 == 1 else 0
             dx = 0

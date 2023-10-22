@@ -48,7 +48,11 @@ class PdfState:
 
     def update(self, cmd, args):
         '''
-        Updates the graphics state
+        Updates the graphics state; for text commands, returns the Unicode string that is printed by
+        the command and the list of 8 coordinates corresponding to the 4 corners of the text rectangle:
+        ```python
+        (UnicodeString, [llx,lly,ulx,uly,lrx,lry,urx,ury])
+        ```
         '''
         f = lambda arg: [float(a) for a in arg] if len(args) > 1 else float(args[0])
         multiply = lambda a,b: [a[0]*b[0] + a[2]*b[1], a[1]*b[0] + a[3]*b[1], a[0]*b[2] + a[2]*b[3],
@@ -110,7 +114,7 @@ class PdfState:
 
             if cs.font == None:
                 warn(f'font undefined: {cmd}, {args}; state: {cs}')
-                return
+                return None, None, None
             s = args[2] if cmd == '"' else args[0] if len(args) > 0 else ''
             if isinstance(s,str): s = [s] if s != '' else []
 
@@ -132,29 +136,56 @@ class PdfState:
             # don't interpret the last displacement as space since it may be followed a negative displacement
             # in TD etc; instead, just ignore it, but include it in the width calculation (next line)
             # this way it will contribute to cs.Tm and will be interpreted as space, if necessary, later
+            zTight = z if len(z) == 0 or isinstance(z[-1],str) else z[:-1]
             textString = ''.join(cs.font.decodeCodeString(t) if isinstance(t,str)
-                                    else f' ' if t > cs.font.spaceWidth *.667 * 0.25 and i != len(z)-1
-                                    else f''
-                                    for i,t in enumerate(z))
+                                    else f' ' if t > cs.font.spaceWidth * cs.fontSize * .667 *.25 else f''
+                                    for t in zTight)
 
+            # This is the displacement by which a point at which the next symbol is placed is moved
             textWidth = sum(cs.font.width(t, isEncoded = True) * cs.fontSize if isinstance(t,str)
                             else t for t in z) * (cs.Th / 100.0)
+            
+            # This is the actual visual width the text string; it is textWidth minus the spacing at the end
+            textWidthTight = sum(cs.font.width(t, isEncoded = True) * cs.fontSize if isinstance(t,str)
+                                else t for t in zTight) * (cs.Th / 100.0)
 
             # Get gap
             gap = self._get_gap()
 
+            # Calculate left coords of the tight text rectangle
+            m = multiply(cs.CTM, cs.Tm)
+            m = multiply(m, cs.font.fontMatrix)
+            llx,lly = m[4],m[5]
+            ulx = m[2] * cs.fontSize * cs.font.bbox[3] + m[4]
+            uly = m[3] * cs.fontSize * cs.font.bbox[3] + m[5]
+
+            # Calculate the tight updated Tm matrix
+            TmTight = multiply(cs.Tm, [1,0,0,1,textWidthTight,0])
+
+            # Calculate right coords tight text rectangle
+            m = multiply(cs.CTM, TmTight)
+            m = multiply(m, cs.font.fontMatrix)
+            lrx,lry = m[4],m[5]
+            urx = m[2] * cs.fontSize * cs.font.bbox[3] + m[4]
+            ury = m[3] * cs.fontSize * cs.font.bbox[3] + m[5]
+
+            # Form the text rectangle
+            textRectTight = [llx,lly,ulx,uly,lrx,lry,urx,ury]
+            # textRectTight = [round(x*1000)/1000 for x in textRect]
+
             # Update Tm, but not Tlm
             cs.Tm = multiply(cs.Tm, [1,0,0,1,textWidth,0])
 
-            if cmd in ["'", '"', 'T*'] and abs(cs.Tl) > cs.fontSize :
+            # Insert the newlines in text, if needed
+            if cmd in ["'", '"', 'T*'] and abs(cs.Tl) > cs.fontSize:
                 textString = '\n' + textString
 
             # Update cs.Tm_old
             cs.Tm_prev = cs.Tm.copy()
 
-            return gap+textString
+            return gap+textString, textWidth, textRectTight
 
-        return None
+        return None, None, None
 
     def _get_gap(self):
         cs = self.current_state
@@ -164,7 +195,7 @@ class PdfState:
         if abs(gap_v) > cs.fontSize * min(abs(T1[3]), abs(T2[3])):
             return '\n' if T2 != [1,0,0,1,0,0] else ''
         else:
-            return ' ' if gap_h > 0.5 * cs.font.spaceWidth *.667 * T1[0] * cs.fontSize * (cs.Th / 100.0) else ''
+            return ' ' if gap_h > 0.25 * cs.font.spaceWidth *.667 * T1[0] * cs.fontSize * (cs.Th / 100.0) else ''
 
 #  ==========================================================================================
 

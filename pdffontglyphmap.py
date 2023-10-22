@@ -71,7 +71,7 @@ class PdfFontGlyphMap:
 
     def composite_glyphname_to_unicode(self, gname:str):
         ''' For a glyph name of the composite 'prefix + number' form, e.g. 'c13', 'glyph10H', etc.,
-        where prefix is of the form: '[a-zA-Z]|#|FLW|uni|glyph|.*\.g' and suffix is a DEX (decimal/hex)
+        where prefix is of the form: '[a-zA-Z]|#|FLW|uni|glyph|MT|.*\.g' and suffix is a DEX (decimal/hex)
         number: '[0-9a-fA-F]+' returns the number part as int by interpreting the corresponding string
         part as a hex or dec number based on the statistics of previous encounters with the glyph names
         of this form. The usage scenario is to first run this function through all available glyph names
@@ -95,6 +95,8 @@ class PdfFontGlyphMap:
 
     def make_cmap(self, encoding:PdfFontEncoding):
         '''
+        Create an instance of PdfFontCMap from an instance of PdfFontEncoding by attempting to map
+        glyph names to Unicode points.
         '''
         stdGlyphMap = PdfFontGlyphMapStandards.get_glyphName2unicodeMap(encoding.name)
         t3map1 = {c:i for i,c in enumerate('ABCDEFGH')}
@@ -157,79 +159,6 @@ class PdfFontGlyphMap:
 
         cmapRe.reset_unicode2cc()
         return cmapRe
-
-    # --------------------------------------------------------------------------- reencode_cmap_old()
-
-    # def reencode_cmap_old(self, encoding:PdfFontEncoding, baseEncoding:PdfFontEncoding, context:PdfFontsContext, direct=False):
-    #     '''Returns a reencoded version of cmap based on the difference between encoding and baseEncoding.
-    #     '''
-    #     glyph_names_local = [g for g in encoding.cc2glyphname.values() if CMAP.strip_dot_endings(g) not in context.glyphMap]
-    #     composites_local = CompositeNames(glyph_names_local)
-
-    #     cmap_out = CMAP(); cc2u = cmap_out.cc2unicode
-
-    #     nativeGlyphMap = PdfFontEncodingStandards.get_glyphName2unicodeMap(encoding)
-
-    #     for cc,gname in encoding.cc2glyphname.items():
-    #         u = None
-    #         gname = encoding.cc2glyphname[cc]
-    #         if gname == '/.notdef':
-    #             continue
-    #         if gname in baseEncoding.glyphname2cc and not direct:
-    #             ccRebased = baseEncoding.glyphname2cc[gname]
-    #             if ccRebased in self.cc2unicode:
-    #                 u = self.cc2unicode[ccRebased]
-    #         g = CMAP.strip_dot_endings(gname)
-    #         if u == None:
-    #             if g in nativeGlyphMap:
-    #                 u = nativeGlyphMap[g]
-    #             elif g in context.glyphMap:
-    #                 u = context.glyphMap[g]
-    #             # native map should be chained with self map, if possible
-    #             if u in self.cc2unicode: u = self.cc2unicode[u]
-    #         if u == None:
-    #             composite = g[1:]
-    #             if all(c in string.digits for c in composite):
-    #                 ccNew = chr(int(composite))
-    #             else:
-    #                 if len(composite) > 1:
-    #                     ccNew = composites_local.gname_to_cc(composite, context.composites_global)
-    #                 else:
-    #                     ccNew = composite
-    #             if ccNew == None:
-    #                 warn(f'character code {cc:X} encodes an unrecognized glyph name {g}')
-    #                 u = cc
-    #             else:
-    #                 u = self.cc2unicode[ccNew] if ccNew in self.cc2unicode else ccNew
-
-    #         cc2u[cc] = u or cc
-
-    #     for cc,gname in encoding.cc2glyphname.items():
-    #         g = CMAP.strip_dot_endings(gname)
-    #         if gname == '.notdef':
-    #             pass
-    #         elif direct and g in context.glyphMap:
-    #             cc2u[cc] = context.glyphMap[g]
-    #         elif gname in baseEncoding.glyphname2cc and baseEncoding.glyphname2cc[g] in self.cc2unicode:
-    #             cc2u[cc] = self.cc2unicode[baseEncoding.glyphname2cc[g]]
-    #         elif g in context.glyphMap:
-    #             # We need to decode the glyph names AND map them with the cmap!!
-    #             d = context.glyphMap[g]
-    #             if len(d) == 1 and d in self.cc2unicode: d = self.cc2unicode[d]
-    #             cc2u[cc] = d
-    #         else:
-    #             # if g == 'AS': print("GOT HERE: gname == AS")
-    #             cc_new = chr(int(g)) if all(c in string.digits for c in g) \
-    #                 else composites_local.gname_to_cc(g[1:], context.composites_global) if len(g) > 1 \
-    #                 else ord(g) if len(g) == 1 \
-    #                 else None
-    #             if cc == None: warn(f'non-standard glyph name: {cc:X} --> \'{gname}\'')
-    #             cc2u[cc] = cc if cc_new == None else self.cc2unicode[cc_new] if cc_new in self.cc2unicode else cc_new
-
-    #         # if g == 'AS': print(f'AS --> {ord(m[c]):X}, CC = {cc:X}')
-
-    #     cmap_out.reset_unicode2cc()
-    #     return cmap_out
 
     # --------------------------------------------------------------------------- strip_dot_endings()
 

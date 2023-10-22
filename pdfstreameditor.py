@@ -89,7 +89,7 @@ class PdfStreamEditor:
 
     def apply_Tw(self, s, Tw):
         '''
-        Introduces explicit word spacing (Tw) in text operator strings. After apply this function
+        Introduces explicit word spacing (Tw) in text operator strings. After applying this function
         to all such strings, the Tw operators can be dropped from the stream entirely.
         '''
         # Word spacing (Tw) is applied to every occurrence of the single-byte character code 32 in
@@ -157,7 +157,7 @@ class PdfStreamEditor:
         By checking the stored results, the recurse() function makes sure it visits each xobject just once.
         At the very last, it calls the recursedFunction() on self and returns the result.
 
-        For an example use of this recurse() function see .print_text()
+        For an example use of this recurse() function see .processText()
         '''
         try: xobjects = self.xobj.inheritable.Resources.XObject.values()
         except: xobjects = []
@@ -180,7 +180,17 @@ class PdfStreamEditor:
     def processTextFunction(self, xobjCache:dict, tree:list=None, state:PdfState = None, options:dict = {}):
         '''
         An auxiliary function used by .print_text()
-        '''        
+        '''
+        superBox = lambda a,b: [min(a[0],b[0]), min(a[1],b[1]), max(a[2],b[2]), max(a[3],b[3])]
+
+        multiply = lambda a,b: [a[0]*b[0] + a[2]*b[1], a[1]*b[0] + a[3]*b[1], a[0]*b[2] + a[2]*b[3],
+                    a[1]*b[2] + a[3]*b[3], a[0]*b[4] + a[2]*b[5] + a[4], a[1]*b[4] + a[3]*b[5] + a[5]]
+        
+        transform_box = lambda a,b: [a[0]*b[0] + a[2]*b[1] + a[4], a[1]*b[0] + a[3]*b[1] + a[5],
+                                    a[0]*b[2] + a[2]*b[3] + a[4], a[1]*b[2] + a[3]*b[3] + a[5]]
+        
+        inside = lambda x,y,c: True if c == None else (c[0]<x<c[2] and c[1]<y<c[3])
+
         res = self.xobj.inheritable.Resources
         firstCall = tree == None
         if firstCall: tree = self.tree
@@ -189,17 +199,43 @@ class PdfStreamEditor:
         # Editing options
         regex = options.get('regex', '')
         removeOCR = options.get('removeOCR', False)
+        cropBox = options.get('cropBox', None)
         edit = regex != '' or removeOCR
         
         outText = ''
         outTree = []
+
+        outBBoxDefault = [1000000,1000000,-1000000,-1000000]
+        outBBox = outBBoxDefault
+        allBoxes = []
+
         isModified = False
- 
+
         for leaf in tree:
             cmd,args = leaf[0],leaf[1]
+
+            # Old current_state
             cs = state.current_state
 
-            cmdText = state.update(cmd,args)
+            # Cursor coords before the command
+            m = multiply(cs.CTM, cs.Tm)
+            x,y = m[4], m[5]
+
+            cmdText, cmdWidth, cmdRect = state.update(cmd,args)
+
+            # Updated current_state
+            cs = state.current_state
+
+            if cmdText != None:
+                llx,lly,ulx,uly,lrx,lry,urx,ury = cmdRect
+                x1 = min(min(llx,ulx),min(lrx,urx))
+                x2 = max(max(llx,ulx),max(lrx,urx))
+                y1 = min(min(lly,uly),min(lry,ury))
+                y2 = max(max(lly,uly),max(lry,ury))
+                cmdBBox = [x1,y1,x2,y2]
+                if inside(x,y,cropBox):
+                    outBBox = superBox(outBBox, cmdBBox)
+                    allBoxes.append(cmdBBox)
 
             if self.debug:
                 outText += '-------------------------------------------------\n'
@@ -208,29 +244,45 @@ class PdfStreamEditor:
                 if cmdText != None:
                     # textString = re.sub(r'\n','[newline]',textString)
                     outText += f"Text: {[cmdText]}\n"
+                    outText += f"BBox: {cmdBBox}\n"
+                    if cs.font != None: outText += f"SpaceWidth: {cs.font.spaceWidth}\n"
+
                 if cmd == 'Tf':
-                    cs = state.current_state
-                    outText += f'SetFont: {[cs.font.name, cs.fontSize, cs.font.spaceWidth]}\n'
+                    outText += f'SetFont: {[cs.font.name, cs.fontSize]}\n'
             else:
-                outText += cmdText if cmdText != None else ''
+                outText += cmdText if cmdText != None and inside(x,y,cropBox) else ''
 
             # Process calls to XObjects
             if cmd == 'Do':
                 xobj = res.XObject[args[0]]
                 if xobj.Subtype == PdfName.Form and xobj.stream != None:
-                    doText, _, _ = xobjCache[id(xobj)]
-                    outText += doText
+                    doText, doBBox, _, _, doBoxes = xobjCache[id(xobj)]
+
+                    # Transform to current coordinate frame
                     if self.debug:
-                        outText += f'doText: {[doText]}'
+                        outText += f'xobj.Matrix: {xobj.Matrix}\n'
+                        outText += f'doBBox: {doBBox}\n'
+                        outText += f'doBoxes: {doBoxes}\n'
+                    doBBox = transform_box(cs.CTM, doBBox)
+                    doBoxes = [transform_box(cs.CTM, b) for b in doBoxes]
+
+                    outText += doText
+                    outBBox = superBox(outBBox, doBBox)
+                    allBoxes += doBoxes
 
             # Process the nested BT/ET block a recursive call on the body
             if cmd == 'BT':
-                blockText, _, _ = self.processTextFunction(xobjCache, leaf[2], state, options)
+                blockText, blockBBox, _, _, blockBoxes = self.processTextFunction(xobjCache, leaf[2], state, options)
                 outText += blockText
+                outBBox = superBox(outBBox, blockBBox)
+                allBoxes += blockBoxes
+
                 if edit:
                     discardText = (regex != '' and re.search(regex,blockText) != None)
+                    # discardOCR = False if not removeOCR else \
+                        # any(len(kid[1])>1 and (kid[0],kid[1][0]) == ('Tf','/OCR') for kid in leaf[2])
                     discardOCR = False if not removeOCR else \
-                        any(len(kid[1])>1 and (kid[0],kid[1][0]) == ('Tf','/OCR') for kid in leaf[2])
+                        any(len(kid[1])>1 and (kid[0],kid[1][0]) == ('Tr','3') for kid in leaf[2])
                     if discardText or discardOCR:
                         print(f'Removed text: {blockText}'); isModified = True
                         body = [l for l in leaf[2] if l[0] not in ['Tj', 'TJ', '"', "'"]]
@@ -245,7 +297,13 @@ class PdfStreamEditor:
             stream = PdfStream.tree_to_stream(outTree)
             self.set_stream(stream)
 
-        return outText, outTree, isModified
+        # Adjust boxes if self.xobj.Matrix is present
+        if self.xobj.Matrix != None and firstCall:
+            m = [float(x) for x in self.xobj.Matrix]
+            outBBox = transform_box(m,outBBox)
+            allBoxes = [transform_box(m,b) for b in allBoxes]
+
+        return outText, outBBox, outTree, isModified, allBoxes
 
     # --------------------------------------------------------------- make_coords_relative()
 
