@@ -15,7 +15,7 @@ Ok, if you got to this point then chances are you are wondering: so, where do I 
 
 # Design choices
 
-_pdfrwx_ first and foremost tries to keep with the philosophy of _pdfrw_ outlined above. To this it adds an observation that in many tasks to process PDF most time is spent on developing a software solution, and not on running it. This leads to the design choices:
+_pdfrwx_ first and foremost tries to keep with the philosophy of _pdfrw_ outlined above. To this it adds an observation that in many PDF processing tasks most time is spent on developing a software solution, and not on running it. This leads to the design choices:
 
 * **pure Python implementation**: easier to check and debug the source code of the library if needed;
 * **output should be simple**: the output should be mostly standard Python / _pdfrw_ classes;
