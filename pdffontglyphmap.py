@@ -71,7 +71,7 @@ class PdfFontGlyphMap:
 
     def composite_glyphname_to_unicode(self, gname:str):
         ''' For a glyph name of the composite 'prefix + number' form, e.g. 'c13', 'glyph10H', etc.,
-        where prefix is of the form: '[a-zA-Z]|#|FLW|uni|glyph|MT|.*\.g' and suffix is a DEX (decimal/hex)
+        where prefix is of the form: '[a-zA-Z]|#|FLW|uni|Char|glyph|MT|.*\.g' and suffix is a DEX (decimal/hex)
         number: '[0-9a-fA-F]+' returns the number part as int by interpreting the corresponding string
         part as a hex or dec number based on the statistics of previous encounters with the glyph names
         of this form. The usage scenario is to first run this function through all available glyph names
@@ -79,7 +79,7 @@ class PdfFontGlyphMap:
         '''
         suffix_type = lambda suffix: self.DEX if all(c in string.digits for c in suffix) else self.HEX
 
-        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|glyph|MT|.*\.g)([0-9a-fA-F]+)$',r'\1|||\2',gname)
+        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|Char|glyph|MT|.*\.g)([0-9a-fA-F]+)$',r'\1|||\2',gname)
         gname_split = re.split(r'\|\|\|',gname_marked)
         prefix,suffix = gname_split if len(gname_split) == 2 else (None,None)
         if prefix == None: return None

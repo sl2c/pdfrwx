@@ -75,7 +75,7 @@ class PdfFilter:
             elif filter in ['/FlateDecode', '/Fl', '/LZWDecode', '/LZW']:
 
                 # PDF Ref. 1.7 Sec. 3.3.3
-                if filter == '/FlateDecode':
+                if filter in ['/FlateDecode','/Fl']:
                     stream = zlib.decompress(stream)
                 else:
                     earlyChange = int(get_key(parm, '/EarlyChange', '1'))

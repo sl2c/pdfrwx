@@ -26,7 +26,7 @@ class PdfVectorImage:
 
         mask = np.array(image)
         mask = np.flipud(mask) # flip upside down since images use inverted coordinate system
-        mask = np.invert(mask) # black is 1 for masks
+        # mask = np.invert(mask) # black is 1 for masks
 
         h,w = mask.shape
 

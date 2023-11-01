@@ -304,10 +304,10 @@ class PdfFont:
             except: self.bbox = [0, 0, 1000, 1000]
 
         # Set cmap
-        try: # /ToUnicode may be junk
-            self.cmap = PdfFontCMap(toUnicodeDict = self.font.ToUnicode) if self.font.ToUnicode != None else None
-        except:
-            self.cmap = None
+        if self.font.ToUnicode != None:
+            try: self.cmap = PdfFontCMap(toUnicodeDict = self.font.ToUnicode) # /ToUnicode may be junk
+            except: self.cmap = None
+        else: self.cmap = None
         
         if self.cmap == None:
             if self.is_cid():
@@ -413,7 +413,7 @@ class PdfFont:
         font = self.font
         if font == None: return None
 
-        if font.Subtype in ['/Type1','/Type3','/TrueType']:
+        if font.Subtype in ['/Type1', '/MMType1', '/Type3', '/TrueType']:
 
             # Set cc2width
             if font.Widths == None:

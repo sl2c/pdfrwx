@@ -340,7 +340,7 @@ class PdfImage:
 
         width, height = int(obj.Width), int(obj.Height)
         bpc, cs = PdfImage.get_image_specs(obj)
-        # msg(f'image specs: {bpc}, {cs}')
+        msg(f'image specs: {bpc}, {cs}')
 
         img = None
 
@@ -376,7 +376,9 @@ class PdfImage:
         elif filter == '/JPXDecode': # --> JPEG 2000
 
             # msg('/JPXDecode --> JPEG2000')
-            img = Image.open(BytesIO(stream))
+            warn(f'/JPXDecode implementation is buggy at the moment, decoding is not attempted')
+            # img = Image.open(BytesIO(stream))
+            return None
 
         else:
             warn(f'unsupported stream filter: {filter}')
@@ -545,7 +547,7 @@ class PdfImage:
                 # Restore icc_profile
                 img.info['icc_profile'] = icc_profile
 
-            if img.mode != 'RGB': 
+            if img.mode != 'RGB':
                 intent = obj.Intent if applyIntent else None
                 # msg(f"Converting {img.mode} to sRGB with rendering intent: {intent}")
                 img = ImageUtils.pil_image_to_srgb(img, intent)
@@ -573,8 +575,9 @@ class PdfImage:
         
         bpc = int(obj.BitsPerComponent)
 
-        if bpc == 1:
-            return 1, PdfColorSpace(mode = '1', cpp = 1)        
+        # This is wrong if the CS is /Indexed (yes, there are indexed bitonal images)
+        # if bpc == 1:
+        #     return 1, PdfColorSpace(mode = '1', cpp = 1)        
 
         return bpc, PdfColorSpace(obj.ColorSpace)
 

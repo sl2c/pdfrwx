@@ -18,18 +18,22 @@ def err(msg):
     the_func = stack[1][0].f_code.co_name
     # the_func = inspect.getouterframes(inspect.currentframe(), 2)[1][3]
     lineno = inspect.getouterframes(inspect.currentframe(), 2)[1][2]
-    eprint(f'Error in {the_class}.{the_func}(), line {lineno}: {msg}')
+    eprint(f'{the_class}.{the_func}(): error in line {lineno}: {msg}')
     sys.exit(1)
 
 def msg(msg):
     '''Prints a warning message in the form: 'func(): warning: msg', where func() is the function that called warn().'''
+    stack = inspect.stack()
+    the_class = stack[1][0].f_locals["self"].__class__.__name__ if "self" in stack[1][0].f_locals else 'global'
     callerName = inspect.getouterframes(inspect.currentframe(), 2)[1][3]
-    eprint(f'{callerName}(): {msg}')
+    eprint(f'{the_class}.{callerName}(): {msg}')
 
 def warn(msg):
     '''Prints a warning message in the form: 'func(): warning: msg', where func() is the function that called warn().'''
+    stack = inspect.stack()
+    the_class = stack[1][0].f_locals["self"].__class__.__name__ if "self" in stack[1][0].f_locals else 'global'
     callerName = inspect.getouterframes(inspect.currentframe(), 2)[1][3]
-    eprint(f'{callerName}(): warning: {msg}')
+    eprint(f'{the_class}.{callerName}(): warning: {msg}')
 
 def er(msg):
     '''Prints a message in the form 'Error: msg' to stderr, the exits.'''

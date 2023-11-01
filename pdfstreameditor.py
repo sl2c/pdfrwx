@@ -42,6 +42,9 @@ class PdfStreamEditor:
         '''
         self.xobj = xobj
         self.glyphMap = glyphMap
+        self.textOnly = textOnly
+        self.graphicsOnly = graphicsOnly
+        self.normalize = normalize
         self.debug = debug
 
         # Parse the stream tree
@@ -153,7 +156,7 @@ class PdfStreamEditor:
 
         The recurse() function tries to solve all of these problems at once: it recurses, as its name
         implies, through the graph of xobjects, parses each xobject's stream, calls the recursedFunction
-        on the parsed stream tree of each xobject, and stores the result of this call in the xobjCache.
+        on the parsed stream tree of each item in self.XObject, and stores the result of this call in the xobjCache.
         By checking the stored results, the recurse() function makes sure it visits each xobject just once.
         At the very last, it calls the recursedFunction() on self and returns the result.
 
@@ -164,7 +167,8 @@ class PdfStreamEditor:
         for x in xobjects:
             if id(x) not in xobjCache and x.Subtype == PdfName.Form and x.stream != None:
                 # Creates an editor of the same type as that of any inheriting class
-                editor = type(self)(x, self.glyphMap)
+                editor = type(self)(x, self.glyphMap, textOnly = self.textOnly, graphicsOnly=self.graphicsOnly,
+                                    normalize = self.normalize, debug = self.debug)
                 xobjCache[id(x)] = editor.recurse(recursedFunction, xobjCache, *args, **kwarg)
 
         return recursedFunction(self, xobjCache, *args, **kwarg)
@@ -245,7 +249,7 @@ class PdfStreamEditor:
                     # textString = re.sub(r'\n','[newline]',textString)
                     outText += f"Text: {[cmdText]}\n"
                     outText += f"BBox: {cmdBBox}\n"
-                    if cs.font != None: outText += f"SpaceWidth: {cs.font.spaceWidth}\n"
+                    if cs.font != None: outText += f"SpaceWidth: {cs.font.spaceWidth}\nEncoding: {cs.font.encoding.cc2glyphname}\n"
 
                 if cmd == 'Tf':
                     outText += f'SetFont: {[cs.font.name, cs.fontSize]}\n'

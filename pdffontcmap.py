@@ -49,10 +49,11 @@ class PdfFontCMap:
         if stream == None: warn(f'no stream in font\'s ToUnicode object: {ToUnicode}') ; self.set_to_identity_map() ; return
 
         if ToUnicode.Filter != None:
+            # stream = PdfFilter.uncompress(ToUnicode).stream
             try:
                 stream = PdfFilter.uncompress(ToUnicode).stream
             except:
-                warn(f'failed to decompress ToUnicode CMap: {ToUnicode}')
+                warn(f"failed to decompress the font's ToUnicode CMap: {ToUnicode}")
                 return
         self.cc2unicode = {}
 

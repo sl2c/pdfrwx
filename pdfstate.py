@@ -136,6 +136,7 @@ class PdfState:
             # don't interpret the last displacement as space since it may be followed a negative displacement
             # in TD etc; instead, just ignore it, but include it in the width calculation (next line)
             # this way it will contribute to cs.Tm and will be interpreted as space, if necessary, later
+            # NB: the 0.25 factor is totally ad hoc and needs to be tested! See also same issue in self._get_gap()
             zTight = z if len(z) == 0 or isinstance(z[-1],str) else z[:-1]
             textString = ''.join(cs.font.decodeCodeString(t) if isinstance(t,str)
                                     else f' ' if t > cs.font.spaceWidth * cs.fontSize * .667 *.25 else f''
