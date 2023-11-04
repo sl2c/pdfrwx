@@ -104,11 +104,15 @@ class PdfFontGlyphMap:
 
         cmap = PdfFontCMap()
         unknown = {}
+
+        # Count the number of 'weird' glyphs - glyphs whose names start with '/;'
+        weird_count = len([v for v in encoding.cc2glyphname.values() if v[:2] == '/;'])
+
         for cc, gname in encoding.cc2glyphname.items():
             if gname == '/.notdef': continue
             unicode = None
             if encoding.isType3:
-                if gname == '/;':
+                if weird_count > 2 and gname == '/;': # if there are many weird ones, but this one is just the weird prefix
                     unicode = chr(0)
                 if len(gname) == 3:
                     if gname[1] == ';': unicode = gname[2] # weird Type3 glyph names of the form: /;.

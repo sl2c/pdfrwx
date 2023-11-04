@@ -286,10 +286,16 @@ class PdfStream:
         return s
 
     def obj_to_stream(obj):
+        '''
+        Converts objects to string representation in accordance with the PDF syntax.
+        The floats are printed in a fixed point format with 10 decimal points accuracy with no trailing zeros.
+        '''
         if isinstance(obj,dict):
             return '<<' + ' '.join([PdfStream.obj_to_stream(key) + ' ' + PdfStream.obj_to_stream(obj[key]) for key in obj]) + '>>'
         elif isinstance(obj,list):
             return '[' + ' '.join([PdfStream.obj_to_stream(element) for element in obj]) + ']'
+        elif isinstance(obj,float):
+            return f'{obj:.10f}'.rstrip('0').rstrip('.')
         else:
             return f'{obj}'
 

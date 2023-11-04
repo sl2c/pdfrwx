@@ -56,7 +56,11 @@ class PdfStreamEditor:
 
     def normalize_text_operators(self, tree:list, state:PdfState = None) -> list:
         '''
-        Normalizes text operators
+        Normalizes text operators by replacing:
+
+        '," --> Tc, Tw, Tj
+        Tw  --> deleted, its effect absorbed in the explicit character displacement values in TJ
+        TD  --> TL, Td
         '''
         if state == None: state = PdfState(self.xobj.inheritable.Resources, self.glyphMap)
         result = []
@@ -76,17 +80,24 @@ class PdfStreamEditor:
                 result.append(['Tc',[args[1]]])
                 cmd, args = "'", [args[2]]
 
-            if cmd in ["'"]:
+            if cmd == "'":
                 state.update('T*',[])
                 result.append(['T*',[]])
                 cmd = 'Tj'
 
-            if cs.Tw != 0 and cmd in ['Tj', 'TJ'] and not cs.font.is_cid():
+            if cmd == 'TD':
+                state.update('TL',[-args[1]])
+                result.append(['TL',[-args[1]]])
+                cmd = 'Td'
+
+            if cmd in ['Tj', 'TJ'] and cs.Tw != 0 and not cs.font.is_cid():
                 args = [self.apply_Tw(args[0], cs.Tw)]
                 cmd = 'Tj' if isinstance(args[0],str) else 'TJ'
 
             state.update(cmd, args)
-            if cmd != 'Tw': result.append([cmd,args])
+
+            if cmd != 'Tw':
+                result.append([cmd,args])
 
         return result
 
@@ -249,7 +260,10 @@ class PdfStreamEditor:
                     # textString = re.sub(r'\n','[newline]',textString)
                     outText += f"Text: {[cmdText]}\n"
                     outText += f"BBox: {cmdBBox}\n"
-                    if cs.font != None: outText += f"SpaceWidth: {cs.font.spaceWidth}\nEncoding: {cs.font.encoding.cc2glyphname}\n"
+                    if cs.font != None:
+                        outText += f"SpaceWidth: {cs.font.spaceWidth}\n"
+                        if cs.font.encoding != None:
+                            outText += f"Encoding: {cs.font.encoding.cc2glyphname}\n"
 
                 if cmd == 'Tf':
                     outText += f'SetFont: {[cs.font.name, cs.fontSize]}\n'
