@@ -340,7 +340,7 @@ class PdfImage:
 
         width, height = int(obj.Width), int(obj.Height)
         bpc, cs = PdfImage.get_image_specs(obj)
-        msg(f'image specs: {bpc}, {cs}')
+        # msg(f'image specs: {bpc}, {cs}')
 
         img = None
 
@@ -398,7 +398,7 @@ class PdfImage:
 
             # PIL has poor or no support for bpc != 8 so unpack these to bpc == 8
             # Here, array.dtype is 'uint8' or 'uint16'
-            array = PdfFilter.unpack_pixels(stream, width, height, cs.cpp, bpc)
+            array = PdfFilter.unpack_pixels(stream, width, height, cs.cpp, bpc, truncate = True)
             
             if cs.mode == 'P':
                 # /Indexed mode

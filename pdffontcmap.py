@@ -77,9 +77,9 @@ class PdfFontCMap:
                 elif isHex:
                     u = PdfFontCMap.UTF16BE_to_Unicode_NEW(t)
                     # if u == None: u = chr(0) # This is a quick and dirty fix for errors in existing ToUnicode CMaps
-                    if u == None: err('Bad stream:\n' + stream + '\n' + 'Bad token: ' + t) 
-                    if isValueList: valueList.append(u)
-                    else: rangeList.append(u)
+                    if u == None: warn('bad token in ToUnicode CMap: ' + t)
+                    if isValueList: valueList.append(u if u != None else chr(0))
+                    else: rangeList.append(u if u != None else chr(0))
 
             if len(rangeList) % 3 != 0: err(f'bfrange: not a whole number of triplets in a bfrange block: {block}')
  
@@ -112,8 +112,8 @@ class PdfFontCMap:
                 elif isHex:
                     u = PdfFontCMap.UTF16BE_to_Unicode_NEW(t)
                     # if u == None: u = chr(0) # This is a quick and dirty fix for errors in existing ToUnicode CMaps
-                    if u == None: err('Bad stream:\n' + stream + '\n' + 'Bad token: ' + t) 
-                    charList.append(u)
+                    if u == None: warn('bad token in ToUnicode CMap: ' + t) 
+                    charList.append(u if u != None else chr(0))
 
             if len(charList) % 2 != 0: err(f'bfchar: not a whole number of pairs in a bfchar block: {block}')
 
@@ -328,8 +328,9 @@ class PdfFontCMap:
             else:
                 d = ord(u[i]) - ord(self.PUP15) # remap to the unmapped original that was stored in private-use area
                 if d<0 or d>self.UNICODE_BMP_MAX:
+                    return None
                     # warn(f'failed to encode: {[u[i]]}')
-                    d = 0 # If remapping fails return chr(0)
+                    # d = 0 # If remapping fails return chr(0)
                 c = chr(d)
                 i+=1
             encodedString += c

@@ -18,9 +18,16 @@ from pdfrwx.djvusedparser import DjVuSedLexer, DjVuSedParser
 from pdfrwx.pdfstate import PdfState
 from pdfrwx.pdffontglyphmap import PdfFontGlyphMap
 from pdfrwx.pdffilter import PdfFilter
+from pdfrwx.pdfimage import PdfImage
 
 import xml.etree.ElementTree as ET # for parsing hOCR files
 
+from PIL import Image, ImageOps
+from math import ceil
+
+import numpy as np
+
+import hashlib
 
 from pdfrwx.common import err,warn,eprint
 
@@ -46,6 +53,10 @@ class PdfStreamEditor:
         self.graphicsOnly = graphicsOnly
         self.normalize = normalize
         self.debug = debug
+
+        # The actual state of the stream editor should be initialized just once!
+        # If a function needs to keep up with something it's 
+        self.state = PdfState(self.xobj.inheritable.Resources, self.glyphMap)
 
         # Parse the stream tree
         stream = self.get_stream()
@@ -86,12 +97,12 @@ class PdfStreamEditor:
                 cmd = 'Tj'
 
             if cmd == 'TD':
-                state.update('TL',[-args[1]])
-                result.append(['TL',[-args[1]]])
+                state.update('TL',[-float(args[1])])
+                result.append(['TL',[-float(args[1])]])
                 cmd = 'Td'
 
             if cmd in ['Tj', 'TJ'] and cs.Tw != 0 and not cs.font.is_cid():
-                args = [self.apply_Tw(args[0], cs.Tw)]
+                args = [self.apply_Tw(args[0], cs)]
                 cmd = 'Tj' if isinstance(args[0],str) else 'TJ'
 
             state.update(cmd, args)
@@ -101,7 +112,7 @@ class PdfStreamEditor:
 
         return result
 
-    def apply_Tw(self, s, Tw):
+    def apply_Tw(self, s, cs:dict):
         '''
         Introduces explicit word spacing (Tw) in text operator strings. After applying this function
         to all such strings, the Tw operators can be dropped from the stream entirely.
@@ -109,6 +120,9 @@ class PdfStreamEditor:
         # Word spacing (Tw) is applied to every occurrence of the single-byte character code 32 in
         # a string when using a simple font or a composite font that defines code 32 as a single-byte code.
         # It does not apply to occurrences of the byte value 32 in multiple-byte codes (PDF Ref. 1.7, sec. 5.2.2)
+        Tw = cs.Tw
+        font = cs.font
+        scale_x = 1/float(font.font.FontMatrix[0]) if font.font.FontMatrix != None else 0.001
         if isinstance(s,str): s = [s]
         sMod = []
         for tok in s:
@@ -120,12 +134,27 @@ class PdfStreamEditor:
                 l = [c + ' ' for c in re.split(r' ', codes)]
                 l[-1] = l[-1][:-1]
                 l = [PdfTextString.from_codes(c, format=format) for c in l]
-                l = [l[0]] + [a for c in l[1:] for a in (f'{-Tw * 1000:f}', c)]
+                l = [l[0]] + [a for c in l[1:] for a in (f'{-Tw * scale_x:f}', c)]
                 sMod += l
             else:
                 sMod.append(tok)
 
         return sMod if len(sMod) > 1 else sMod[0]
+
+    def get_box(self, dpi = 300):
+        '''
+        Returns self.xobj's box, as an array of four floats — llx, lly, urx, ury -
+        the coordinates of the the lower left and upper right corners of the box,
+        which defaults to self.xobj.CropBox for pdf pages,
+        to self.xobj.BBox for PDF Form xobjects, and to [0,0,1,1] for Image xobjects.
+        '''
+        f = lambda array: [float(a) for a in array]
+        cropBox = self.xobj.inheritable.CropBox
+        if cropBox == None: cropBox = self.xobj.inheritable.MediaBox
+        return f(cropBox) if self.xobj.Contents != None \
+            else f(self.xobj.BBox) if self.xobj.Subtype == PdfName.Form \
+            else [0,0,1,1] if self.xobj.Subtype == PdfName.Image \
+            else None
 
     def get_stream(self):
         '''
@@ -134,7 +163,7 @@ class PdfStreamEditor:
         '''
         return ''.join(PdfFilter.uncompress(c).stream for c in encapsulate(self.xobj.Contents)) \
             if self.xobj.Contents != None else PdfFilter.uncompress(self.xobj).stream
-    
+        
     def set_stream(self, stream:str):
         '''
         Sets self.xobj's stream in cases where self.xobj.stream exists as well as in cases
@@ -190,38 +219,48 @@ class PdfStreamEditor:
         '''
         Print text contained in the stream
         '''
-        return self.recurse(PdfStreamEditor.processTextFunction, xobjCache=xobjCache, tree=None, state=None, options=options)
+        return self.recurse(PdfStreamEditor.processTextFunction, xobjCache=xobjCache, tree=None, options=options)
 
-    def processTextFunction(self, xobjCache:dict, tree:list=None, state:PdfState = None, options:dict = {}):
+    def processTextFunction(self, xobjCache:dict, tree:list=None, options:dict = {}):
         '''
         An auxiliary function used by .print_text()
         '''
-        superBox = lambda a,b: [min(a[0],b[0]), min(a[1],b[1]), max(a[2],b[2]), max(a[3],b[3])]
+        superBox = lambda a,b: [min(a[0],b[0]), min(a[1],b[1]), max(a[2],b[2]), max(a[3],b[3])] \
+                        if a != None and b != None else None
 
         multiply = lambda a,b: [a[0]*b[0] + a[2]*b[1], a[1]*b[0] + a[3]*b[1], a[0]*b[2] + a[2]*b[3],
-                    a[1]*b[2] + a[3]*b[3], a[0]*b[4] + a[2]*b[5] + a[4], a[1]*b[4] + a[3]*b[5] + a[5]]
+                    a[1]*b[2] + a[3]*b[3], a[0]*b[4] + a[2]*b[5] + a[4], a[1]*b[4] + a[3]*b[5] + a[5]] \
+                        if a != None and b != None else None
         
         transform_box = lambda a,b: [a[0]*b[0] + a[2]*b[1] + a[4], a[1]*b[0] + a[3]*b[1] + a[5],
-                                    a[0]*b[2] + a[2]*b[3] + a[4], a[1]*b[2] + a[3]*b[3] + a[5]]
+                                    a[0]*b[2] + a[2]*b[3] + a[4], a[1]*b[2] + a[3]*b[3] + a[5]] \
+                                    if a != None and b != None else None
         
-        inside = lambda x,y,c: True if c == None else (c[0]<x<c[2] and c[1]<y<c[3])
+        inside = lambda x,y,c: True if c == None else (min(c[0],c[2]) <= x <= max(c[0],c[2]) \
+                                                       and min(c[1],c[3]) <= y <= max(c[1],c[3]))
 
         res = self.xobj.inheritable.Resources
         firstCall = tree == None
         if firstCall: tree = self.tree
-        if state == None: state = PdfState(self.xobj.inheritable.Resources, self.glyphMap)
-
+        
         # Editing options
         regex = options.get('regex', '')
         removeOCR = options.get('removeOCR', False)
-        cropBox = options.get('cropBox', None)
+        render = options.get('render', False)
         edit = regex != '' or removeOCR
         
         outText = ''
         outTree = []
+        dpi = 300
+        cropBox = self.get_box()
+        if cropBox != None:
+            width, height = ceil(abs(cropBox[2]-cropBox[0])*dpi/72), ceil(abs(cropBox[3]-cropBox[1])*dpi/72)
+            if width == 0 or height == 0: err(f'bad CropBox: {cropBox}')
+            outImage = Image.new('RGB',(width,height), color = 'white')
+        else:
+            outImage = None
 
-        outBBoxDefault = [1000000,1000000,-1000000,-1000000]
-        outBBox = outBBoxDefault
+        outBBox = None
         allBoxes = []
 
         isModified = False
@@ -230,16 +269,16 @@ class PdfStreamEditor:
             cmd,args = leaf[0],leaf[1]
 
             # Old current_state
-            cs = state.current_state
+            cs = self.state.current_state
 
             # Cursor coords before the command
             m = multiply(cs.CTM, cs.Tm)
             x,y = m[4], m[5]
 
-            cmdText, cmdWidth, cmdRect = state.update(cmd,args)
+            cmdText, cmdWidth, cmdRect = self.state.update(cmd,args)
 
             # Updated current_state
-            cs = state.current_state
+            cs = self.state.current_state
 
             if cmdText != None:
                 llx,lly,ulx,uly,lrx,lry,urx,ury = cmdRect
@@ -268,29 +307,84 @@ class PdfStreamEditor:
                 if cmd == 'Tf':
                     outText += f'SetFont: {[cs.font.name, cs.fontSize]}\n'
             else:
+                # outText += cmdText if cmdText != None and inside(x,y,cropBox) else ''
                 outText += cmdText if cmdText != None and inside(x,y,cropBox) else ''
 
             # Process calls to XObjects
             if cmd == 'Do':
                 xobj = res.XObject[args[0]]
+
                 if xobj.Subtype == PdfName.Form and xobj.stream != None:
-                    doText, doBBox, _, _, doBoxes = xobjCache[id(xobj)]
+
+                    doText, doBBox, _, _, doBoxes,_ = xobjCache[id(xobj)]
 
                     # Transform to current coordinate frame
                     if self.debug:
                         outText += f'xobj.Matrix: {xobj.Matrix}\n'
                         outText += f'doBBox: {doBBox}\n'
                         outText += f'doBoxes: {doBoxes}\n'
+
                     doBBox = transform_box(cs.CTM, doBBox)
                     doBoxes = [transform_box(cs.CTM, b) for b in doBoxes]
-
-                    outText += doText
                     outBBox = superBox(outBBox, doBBox)
                     allBoxes += doBoxes
 
+                    outText += doText
+
+                if xobj.Subtype == PdfName.Image and render:
+
+                    doImage = PdfImage.decode(xobj)
+                    w, h = doImage.size
+                    c = cropBox
+                    x1,y1,x2,y2 = min(c[0],c[2]), min(c[1],c[3]), max(c[0],c[2]), max(c[1],c[3])
+                    m = (1/w, 0, 0, -1/h, 0, 1)
+                    m = multiply(cs.CTM, m)
+                    m = multiply([1,0,0,1,-x1,-y1], m)
+                    m = multiply([1,0,0,-1,0,y2-y1],m)
+                    m = multiply([dpi/72, 0,0, dpi/72,0,0],m)
+
+                    doBBox = [0,0,1,1]
+                    doBoxes = [doBBox]
+
+                    doBBox = transform_box(cs.CTM, doBBox)
+                    outBBox = superBox(outBBox, doBBox)
+                    allBoxes += [doBBox]
+
+                    m[4] = round(m[4])
+                    m[5] = round(m[5])
+                    if abs(m[0]-1) < 1/w: m[0] = 1
+                    if abs(m[3]-1) < 1/h: m[3] = 1
+
+                    # msg(f'AFFINE TRANSFORM: {m}')
+
+                    # 1) PIL needs and inverse matrix
+
+                    n = np.array([[m[0],m[2],m[4]],[m[1],m[3],m[5]],[0,0,1]])
+                    n = np.linalg.inv(n)  
+                    a,b,c = n[0]
+                    d,e,f = n[1]
+                    c = round(c)
+                    f = round(f)
+                    if abs(a-1) < 1/w: a = 1
+                    if abs(e-1) < 1/h: e = 1
+                    # msg(f'AFFINE TRANSFORM INVERSE: {(a,b,c,d,e,f)}')
+
+                    doImage = doImage.transform(outImage.size,
+                                                Image.AFFINE, (a,b,c,d,e,f),
+                                                resample = Image.BICUBIC,
+                                                fillcolor = 'white')
+
+                    mask = doImage.copy()
+                    mask = mask.convert('L')
+                    mask = ImageOps.invert(mask)
+
+                    outImage.paste(doImage, mask = mask)
+
+
+
             # Process the nested BT/ET block a recursive call on the body
             if cmd == 'BT':
-                blockText, blockBBox, _, _, blockBoxes = self.processTextFunction(xobjCache, leaf[2], state, options)
+                blockText, blockBBox, _, _,blockBoxes,_ = self.processTextFunction(xobjCache, leaf[2], options)
                 outText += blockText
                 outBBox = superBox(outBBox, blockBBox)
                 allBoxes += blockBoxes
@@ -321,7 +415,7 @@ class PdfStreamEditor:
             outBBox = transform_box(m,outBBox)
             allBoxes = [transform_box(m,b) for b in allBoxes]
 
-        return outText, outBBox, outTree, isModified, allBoxes
+        return outText, outBBox, outTree, isModified, allBoxes, outImage
 
     # --------------------------------------------------------------- make_coords_relative()
 
@@ -426,12 +520,13 @@ class PdfStreamEditor:
                     tree += xtree
                 else:
                     s = PdfStream.tree_to_stream(xtree)
+                    md5 = hashlib.md5(s.encode("utf-8")).hexdigest()
                     try:
-                        xobj = xobjects[s]
-                        xobj_name = self.register_xobj(xobj,self.resources)
+                        xobj = xobjects[md5]
+                        xobj_name = self.register_xobj(xobj)
                         tree.append(['Do',[xobj_name]])
                         counter+=1
-                    except: # if s is not in xobjects
+                    except: # if s's md5 is not in xobjects
                         if s in chunks: chunks[s] += 1
                         else: chunks[s] = 1
                         # store xtree & its string rep to avoid recomputing it in the 2nd run below
@@ -458,12 +553,13 @@ class PdfStreamEditor:
                 self.tree.append(leaf)
             else:
                 s,xtree = args
+                md5 = hashlib.md5(s.encode("utf-8")).hexdigest()
                 try:
-                    xobj = xobjects[s]
-                    xobj_name = self.register_xobj(xobj,self.resources)
+                    xobj = xobjects[md5]
+                    xobj_name = self.register_xobj(xobj)
                     self.tree.append(['Do',[xobj_name]])
                     counter+=1
-                except: # if s is not in xobjects
+                except: # if s's md5 is not in xobjects
 
                     if s not in chunks: err(f'chunk not in chunks: {s}')
 
@@ -471,7 +567,7 @@ class PdfStreamEditor:
                     # 0.4 is an empirical deflate compression factor for typical graphics streams
                     # 256 is a rough empirical estimate of the average xobjects overhead
                     if (chunks[s] - 1) * 0.4 * len(s) < 256:
-                        self.tree += xtree 
+                        self.tree += xtree
                     else:
                         xobj = IndirectPdfDict(
                             Name = PdfName(f'gl{len(xobjects)}'),
@@ -482,12 +578,12 @@ class PdfStreamEditor:
                             Resources = PdfDict(ProcSet = [PdfName.PDF])
                         )
                         xobj.stream = s
-                        xobjects[s] = xobj
+                        xobjects[md5] = xobj
 
                         # debug
                         # if ref: tree.append(['rg',['1 0 0']])
 
-                        xobj_name = self.register_xobj(xobj,self.resources)
+                        xobj_name = self.register_xobj(xobj)
                         self.tree.append(['Do',[xobj_name]])
                         counter += 1
 
@@ -495,8 +591,8 @@ class PdfStreamEditor:
 
     # --------------------------------------------------------------- register_xobj()
 
-    def register_xobj(self,xobj:PdfDict,resources:PdfDict):
-        '''Registers xobj in the PDF page resources (required before you can call: 'name Do')
+    def register_xobj(self,xobj:PdfDict):
+        '''Registers xobj in the PDF page resources (required before you can call '/name Do')
         by safely setting resources.XObject[name] = xobj, where name == xobj.Name, unless xobj.Name
         is already in resources.XObject and id(xobj) != id(resources.XObject[xobj.Name]) -- a name collision.
         Such collisions are resolved by setting name == xobj.Name+'z'*N, where N is the minimal integer that
@@ -506,18 +602,22 @@ class PdfStreamEditor:
         since, according to the PDF specs, xobj.Name is itself entirely optional (we set it mostly for debugging).
         Note 2: if initially resources.XObjects does not exist it's created. 
         '''
-        if resources.XObject == None: resources.XObject = PdfDict()
+        if self.xobj.Resources == None:
+            self.xobj.Resources = PdfDict() if self.xobj.inheritable.Resources == None \
+                                                else self.xobj.inheritable.Resources.copy()
+        res = self.xobj.Resources
+        if res.XObject == None: res.XObject = PdfDict()
         name = xobj.Name
-        while name in resources.XObject:
-            if id(xobj) == id(resources.XObject[name]): return name
+        while name in res.XObject:
+            if id(xobj) == id(res.XObject[name]): return name
             name = PdfName(name.lstrip('/')+'z')
-        resources.XObject[name] = xobj
+        res.XObject[name] = xobj
         return name
 
     # --------------------------------------------------------------- get_bbox()
 
     def get_bbox(self,tree:list):
-        '''Get bounding box for everythin inside the parsed PDF stream tree;
+        '''Get bounding box for everything inside the parsed PDF stream tree;
         a placeholder for now, this needs to be coded'''
         return [-1000, -1000, 2000, 2000]
 

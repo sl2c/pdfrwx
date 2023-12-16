@@ -317,9 +317,10 @@ class PdfFont:
                 # infer cmap based on the mappings from glyph names to Unicode points
                 self.cmap = self.glyphMap.make_cmap(self.encoding)
 
-        # spaceWidth; this is only needed to put space breaks in text: see class PdfState
-        self.spaceWidth = self.width(' ') if ' ' in self.cmap.unicode2cc \
-            else self.widthAverage * self.scaleFactor
+        # spaceWidth is only needed by the class PdfState to regenerate spaces when extracting text
+        self.spaceWidth = self.cc2width.get(self.cmap.unicode2cc.get(' ', None),0)
+        if self.spaceWidth == 0:
+            self.spaceWidth = self.widthAverage * self.scaleFactor
 
     def get_font_name(self):
         '''
@@ -401,8 +402,8 @@ class PdfFont:
         Returns the width of string if typeset with self.font. 
         '''
         if not isEncoded: s = self.cmap.encode(s)
-        widthFunc = lambda cc: self.cc2width[cc] if cc in self.cc2width else self.widthMissing
-        return sum(widthFunc(cc) for cc in s) * self.scaleFactor
+        if s == None: return None
+        return sum(self.cc2width.get(cc, self.widthMissing) for cc in s) * self.scaleFactor
 
     def make_cc2width(self):
         '''
@@ -497,32 +498,46 @@ class PdfFont:
         multiply = lambda a,b: [a[0]*b[0] + a[2]*b[1], a[1]*b[0] + a[3]*b[1], a[0]*b[2] + a[2]*b[3],
             a[1]*b[2] + a[3]*b[3], a[0]*b[4] + a[2]*b[5] + a[4], a[1]*b[4] + a[3]*b[5] + a[5]]
         courier = PdfFont(PdfFontCore14.make_core14_font_dict('/Courier'))
+        arial = PdfFont(PdfFontCore14.make_core14_font_dict('/Arial'))
 
         fs = 14 # Font size
 
         # print(encoding.map)
         page = PdfDict(
             Type = PdfName.Page,
-            MediaBox = [0,0,380, 380],
+            MediaBox = [20,0,360, 360],
             Contents = IndirectPdfDict(),
-            Resources = PdfDict(Font = PdfDict(F = self.font, C = courier.font))
+            Resources = PdfDict(Font = PdfDict(F = self.font, C = courier.font, A = arial.font))
         )
 
         stream  = f'1 0 0 1 40 320 cm\nBT\n'
-        stream += f'1 0 0 1 0 40 Tm /C 10 Tf (Font: {self.name}) Tj\n'
+        stream += f'1 0 0 1 -10 30 Tm /C 10 Tf (Font: {self.name}) Tj\n'
 
+        # Print legend
         legend = '0123456789ABCDEF'
         stream += '/C 6 Tf\n'
         for col in range(16):
-            stream += f'1 0 0 1 {10*(2*col) + 2} 20 Tm ({legend[col]}) Tj\n'
+            stream += f'1 0 0 1 {10*(2*col) + 5} 20 Tm ({legend[col]}) Tj\n'
         for row in range(16):
-            stream += f'1 0 0 1 -20 {-10*(2*row) + 2} Tm ({legend[row]}) Tj\n'
+            stream += f'1 0 0 1 -10 {-10*(2*row) + 2} Tm ({legend[row]}) Tj\n'
 
+        # Set scale
         scale = 1 if self.font.Subtype != '/Type3' else t3scale if t3scale != 'auto' \
                     else 1/(abs(self.fontMatrix[0]) * abs(self.bbox[2] - self.bbox[0]))
-
         stream += f'/F {fs*scale:f} Tf\n'
 
+        # Paint widths
+        stream += '0.9 g\n'
+        for row in range(16):
+            # dx = fs*1 if row % 2 == 1 else 0
+            dx = 0
+            for col in range(16):
+                width = self.width(chr(col + row*16),isEncoded=True)
+                x,y = dx + 10*(2*col), -2*10*row
+                stream += f'{x} {y} {fs*scale*width} {fs} re f\n'
+        stream += '0 g\n'
+
+        # Print chars
         invert = self.fontMatrix[3] < 0
         for row in range(16):
             # dx = fs*1 if row % 2 == 1 else 0
@@ -535,6 +550,17 @@ class PdfFont:
                 # stream += f'q 1 0 0 -1 0 {+0.75*fs-4*fs*row} cm '
                 # stream += f'/F {fs:f} Tf <{row*16 + col:02X}> Tj Q\n'
                 stream += f'<{row*16 + col:02X}> Tj\n'
+
+
+        stream += '/A 3 Tf\n'
+        stream += '0.5 g\n'
+        if self.encoding != None:
+            for row in range(16):
+                for col in range(16):
+                    cc = chr(row * 16 + col)
+                    if cc in self.encoding.cc2glyphname:
+                        hexStr = self.encoding.cc2glyphname[cc][1:].encode('latin').hex()
+                        stream += f'1 0 0 1 {10 * 2 * col} {-2 * 10 * row - 4} Tm <{hexStr}> Tj\n'
 
         stream += 'ET\n'
         page.Contents.stream = stream

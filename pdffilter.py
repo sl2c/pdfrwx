@@ -181,13 +181,20 @@ class PdfFilter:
 
     # -------------------------------------------------------------------- unpack_pixels()
 
-    def unpack_pixels(stream:bytes, width:int, height:int, colors:int, bpc:int):
+    def unpack_pixels(stream:bytes, width:int, height:int, colors:int, bpc:int, truncate = False):
         '''
         Converts a bytes stream of pixels, packed with bpc bits per pixel, into a numpy array
         of shape (height, width, colors). The elements of the array take values of the form N * M,
         where N = 2^{8-bpc} and M = 1..2^{bpc}-1 if bpc <= 8, or 1..2^16-1 if bpc == 16.
+
+        If truncate == True and len(stream) == width*height*colors*bpc/8 + 1 and the last
+        byte of the stream is b'\n' then that trailing newline char is truncated. If truncate == False
+        this situation produces an error.
         '''
         assert 1<= bpc <=8 or bpc == 16
+        if truncate and (len(stream) - 1) * 8 == width * height * colors * bpc and stream[-1] == 10:
+            warn("truncating stream")
+            stream = stream[:-1]
         array = np.frombuffer(stream, dtype='uint16' if bpc == 16 else 'uint8')
         if bpc not in [8,16]:
             assert len(stream) % height == 0
@@ -196,6 +203,8 @@ class PdfFilter:
             array = np.unpackbits(array, axis=1)
             array = array[:,:width * colors * bpc].reshape(height, width, colors, bpc)
             array = np.packbits(array, axis=3) # bits in the upper part of byte
+        if len(array) != width * height * colors:
+            err(f'len(array) != width * height * colors ({len(array)} vs. {width} * {height} * {colors})\n' + f'{[stream]}')
         return array.reshape(height, width, colors)
 
     # -------------------------------------------------------------------- pack_pixels()

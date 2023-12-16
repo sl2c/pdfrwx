@@ -19,6 +19,7 @@ class PdfFontEncoding:
         '''
         self.name = None
         self.isType3 = False
+        self.baseEncoding = '/WinAnsiEncoding'
 
         self.cc2glyphname = {} # A map from character codes (chars) to glyph names
         self.glyphname2cc = {} # A reverse map from glyph names to character codes (chars)
@@ -27,7 +28,7 @@ class PdfFontEncoding:
 
             self.name = name
             self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(name)
-            if self.cc2glyphname == None: err(f'invalid encoding name: {name}') 
+            if self.cc2glyphname == None: err(f'invalid encoding name: {name}')
 
         if differences != None:
 
@@ -37,15 +38,21 @@ class PdfFontEncoding:
 
             self.isType3 = font.Subtype == '/Type3'
 
-            if font.Encoding == None:
+            if ignoreBaseEncoding or self.isType3:
+                self.baseEncoding = None
+            else:
+                try: self.baseEncoding = font.Encoding.BaseEncoding
+                except: self.baseEncoding = None
+                if self.baseEncoding not in ['/WinAnsiEncoding', '/SymbolEncoding', '/ZapfDingbatsEncoding']:
+                    self.baseEncoding = PdfFontCore14.built_in_encoding(font.BaseFont) or '/WinAnsiEncoding'
 
-                # Old versions of PDF let core14 fonts to have no /Encoding; try to guess if it's a core14 font
-                self.name = PdfFontCore14.built_in_encoding(font.BaseFont) if font.Subtype == '/Type1' else None
-                if self.name == None:
-                    # warn(f'Font {font.BaseFont} has no /Encoding; using /WinAnsiEncoding')
-                    self.name = '/WinAnsiEncoding'
+            if not isinstance(font.Encoding, PdfDict) and font.Encoding not in PdfFontEncodingStandards.encodingVectors:
+
+                self.name = self.baseEncoding
                 self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.name)
-                if self.cc2glyphname == None: err(f'unknown encoding name: {self.name}')
+
+                if font.Encoding != None:
+                    warn(f'Font {font.BaseFont} has unrecognized /Encoding: {font.Encoding}; using {self.name}')
 
             elif isinstance(font.Encoding, PdfDict):
 
@@ -59,7 +66,7 @@ class PdfFontEncoding:
 
                 self.cc2glyphname = {} \
                         if ignoreBaseEncoding or self.isType3 \
-                    else PdfFontEncodingStandards.get_cc2glyphname('/WinAnsiEncoding') \
+                    else PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding) \
                         if font.Encoding.BaseEncoding == None \
                     else PdfFontEncodingStandards.get_cc2glyphname(font.Encoding.BaseEncoding)
 
@@ -73,15 +80,15 @@ class PdfFontEncoding:
                 # else:
                 #     err(f'font.Encoding.Differences is missing')
 
-                self.name = [font.Encoding.BaseEncoding, '/Differences']
+                self.name = [self.baseEncoding, '/Differences']
 
-            elif font.Subtype != '/Type0':
-                self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(font.Encoding)
-                if self.cc2glyphname == None: err(f'font has unknown encoding: {font.Encoding}')
-                self.name = font.Encoding
             else:
+                if font.Subtype != '/Type0':
+                    self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(font.Encoding)
+                    if self.cc2glyphname == None:
+                        err(f'internal error for font encoding: {font.Encoding}')
                 self.name = font.Encoding
-
+        
             # fd = font.FontDescriptor
             # if fd != None and fd.CharSet != None:
             #     self.cc2glyphname = {cc:name for cc,name in self.cc2glyphname.items() if name in fd.CharSet}

@@ -65,6 +65,11 @@ class PdfFontCore14:
 
     def built_in_encoding(fontname:PdfName):
         '''
+        If fontname is the name of one of Core 14 fonts
+        (see PdfFontCore14.CORE14_FONTNAMES_ALIASES for Core 14 font names and aliases),
+        returns the name of the built-in
+        encoding of that font, otherwise returns None. Examples: '/Times' --> '/WinAnsiEncoding',
+        '/Symbol' --> '/SymbolEncoding', '/ZapfDingbats' --> '/ZapfDingbatsEncoding'.
         '''
         standard_fontname = PdfFontCore14.standard_fontname(fontname)
         if standard_fontname == None: return None

@@ -18,7 +18,7 @@ class PdfVectorImage:
         '''Converts PDF image xobject to vectorized PDF form xobject
         The mask may be optionally upsampled and/or smoothed; this may (or may not) increase
         the quality of the resulting vectorized form depending on the particular mask.
-        The value of alpha = 0.93 preserve serifs a bit better; values > 1 make for mor rounded curves.
+        The value of alpha = 0.93 preserves serifs a bit better; values > 1 make for more rounded curves.
         '''
         if obj == None or obj.Subtype != PdfName.Image: return False
         image = PdfImage.decode(obj)
@@ -26,13 +26,13 @@ class PdfVectorImage:
 
         mask = np.array(image)
         mask = np.flipud(mask) # flip upside down since images use inverted coordinate system
-        # mask = np.invert(mask) # black is 1 for masks
+        mask = np.invert(mask) # black is 1 for masks
 
         h,w = mask.shape
 
         mask = np.where(mask, 1, 0).astype(np.uint8) # Convert boolean to uint8
         noncorner = None
-        if upsample: mask, noncorner = PdfVectorImage.scale2x(mask)
+        if upsample: mask, noncorner = PdfVectorImage.scale2x(mask, preserveCorners=True)
         if smooth != 0: mask = PdfVectorImage.smooth(mask, noncorner, smooth > 0)
 
         if not vectorize:
@@ -95,7 +95,7 @@ class PdfVectorImage:
         d += ' '.join(PdfVectorImage.potrace_curve_to_pdf_stream(child, scaleFactor) for child in curve.children)
         return d
 
-    def scale2x(image:np.array):
+    def scale2x(image:np.array, preserveCorners = True):
         '''Image upsampling using the scale2x algorithm: https://www.scale2x.it/algorithm
         The image is an arbitrary 2D numpy array (any dtype). Given a WxH image, returns a tuple (X, NONCORNER)
         where X is a 2Wx2H array of the same dtype and NONCORNER is a boolean array of the same dimensions
@@ -124,10 +124,18 @@ class PdfVectorImage:
         LL_NONCORNER = np.logical_or(NONEDGE, np.logical_or(B!=BR, L!=TL))
         LR_NONCORNER = np.logical_or(NONEDGE, np.logical_or(B!=BL, R!=TR))
 
-        UL = np.where(edge, np.where(np.logical_and(T==L, UL_NONCORNER),L,image),image)
-        UR = np.where(edge, np.where(np.logical_and(T==R, UR_NONCORNER),R,image),image)
-        LL = np.where(edge, np.where(np.logical_and(B==L, LL_NONCORNER),L,image),image)
-        LR = np.where(edge, np.where(np.logical_and(B==R, LR_NONCORNER),R,image),image)
+
+        if preserveCorners:
+            UL = np.where(edge, np.where(np.logical_and(T==L, UL_NONCORNER),L,image),image)
+            UR = np.where(edge, np.where(np.logical_and(T==R, UR_NONCORNER),R,image),image)
+            LL = np.where(edge, np.where(np.logical_and(B==L, LL_NONCORNER),L,image),image)
+            LR = np.where(edge, np.where(np.logical_and(B==R, LR_NONCORNER),R,image),image)
+        else:
+            UL = np.where(edge, np.where(T==L,L,image),image)
+            UR = np.where(edge, np.where(T==R,R,image),image)
+            LL = np.where(edge, np.where(B==L,L,image),image)
+            LR = np.where(edge, np.where(B==R,R,image),image)
+
 
         X = np.empty(image.size * 4, dtype=image.dtype).reshape(image.shape[0]*2,image.shape[1]*2)
         X[0::2,0::2] = UL
