@@ -130,6 +130,9 @@ class PdfState:
                     space = lambda e: cs.Tc + (cs.Tw if not isCID and e == ' ' else 0)
                     z += [x for e in codes for x in (e,space(e))]
                 else:
+                    # Note: the numbers in the TJ operator arguments array are displacements that are expressed
+                    # in neither the text space units, nor the glyph space units:
+                    # "The number is expressed in thousandths of a unit of text space" (PDF Ref sec 5.3.2)
                     if len(z) == 0: z.append(0)
                     z[-1] -= float(token)*cs.fontSize/1000
 

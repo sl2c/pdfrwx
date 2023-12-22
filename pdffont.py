@@ -47,6 +47,8 @@ class PdfTextString(str):
 
     UPD: We now overload the .from_bytes() function as it turns out that the pdfrw version has a bug;
     see function's help for more info.
+    UPD2: We no longer derive the class from pdfrw's PdfString class; we derive it from Python's str
+    class instead.
     '''
 
     def format(self):
@@ -418,7 +420,8 @@ class PdfFont:
 
             # Set cc2width
             if font.Widths == None:
-                name2width = PdfFontCore14.make_name2width(self.name) if font.Subtype == '/Type1' else None
+                name2width = PdfFontCore14.make_name2width(self.name) \
+                    if font.Subtype in ['/Type1', '/TrueType'] else None
                 if name2width == None: err(f'failed to make widths: {font}')
                 cc2width = {cc:name2width[name] for cc,name in self.encoding.cc2glyphname.items()
                                 if name in name2width != None}
@@ -489,82 +492,82 @@ class PdfFont:
         #     s += ' (' + ', '.join(f'{PdfFont(w)}' for w in v.DescendantFonts) + ')'
         return s
 
-    def fontTableToPdfPage(self, t3scale = 'auto'):
+    def fontTableToPdfPages(self, t3scale = 'auto'):
         '''
-        Returns a PDF page which shows the font table: all the glyphs with glyph names and ToUnicode values.
+        Returns a list of PDF pages which show the font tables: all the glyphs with glyph names and ToUnicode values.
         The scale argument can be either 'auto' or a float number. Any value of the scale only
         affects Type3 fonts.
         '''
-        multiply = lambda a,b: [a[0]*b[0] + a[2]*b[1], a[1]*b[0] + a[3]*b[1], a[0]*b[2] + a[2]*b[3],
-            a[1]*b[2] + a[3]*b[3], a[0]*b[4] + a[2]*b[5] + a[4], a[1]*b[4] + a[3]*b[5] + a[5]]
+
         courier = PdfFont(PdfFontCore14.make_core14_font_dict('/Courier'))
         arial = PdfFont(PdfFontCore14.make_core14_font_dict('/Arial'))
 
-        fs = 14 # Font size
-
-        # print(encoding.map)
-        page = PdfDict(
-            Type = PdfName.Page,
-            MediaBox = [20,0,360, 360],
-            Contents = IndirectPdfDict(),
-            Resources = PdfDict(Font = PdfDict(F = self.font, C = courier.font, A = arial.font))
-        )
-
-        stream  = f'1 0 0 1 40 320 cm\nBT\n'
-        stream += f'1 0 0 1 -10 30 Tm /C 10 Tf (Font: {self.name}) Tj\n'
-
-        # Print legend
-        legend = '0123456789ABCDEF'
-        stream += '/C 6 Tf\n'
-        for col in range(16):
-            stream += f'1 0 0 1 {10*(2*col) + 5} 20 Tm ({legend[col]}) Tj\n'
-        for row in range(16):
-            stream += f'1 0 0 1 -10 {-10*(2*row) + 2} Tm ({legend[row]}) Tj\n'
-
-        # Set scale
+        # Font size & scale
+        fs = 14 
         scale = 1 if self.font.Subtype != '/Type3' else t3scale if t3scale != 'auto' \
                     else 1/(abs(self.fontMatrix[0]) * abs(self.bbox[2] - self.bbox[0]))
-        stream += f'/F {fs*scale:f} Tf\n'
-
-        # Paint widths
-        stream += '0.9 g\n'
-        for row in range(16):
-            # dx = fs*1 if row % 2 == 1 else 0
-            dx = 0
-            for col in range(16):
-                width = self.width(chr(col + row*16),isEncoded=True)
-                x,y = dx + 10*(2*col), -2*10*row
-                stream += f'{x} {y} {fs*scale*width} {fs} re f\n'
-        stream += '0 g\n'
-
-        # Print chars
+        z = fs*scale
+        
+        # Inversion flag
         invert = self.fontMatrix[3] < 0
-        for row in range(16):
-            # dx = fs*1 if row % 2 == 1 else 0
-            dx = 0
-            for col in range(16):
-                Tm = ([1,0,0,-1] if invert else [1,0,0,1]) + [dx + 10*(2*col), -2*10*row]
-                TmString = ' '.join(f'{x}' for x in Tm)
-                stream += f'{TmString} Tm '
-                # stream += f'/C {fs} Tf (#$) Tj '
-                # stream += f'q 1 0 0 -1 0 {+0.75*fs-4*fs*row} cm '
-                # stream += f'/F {fs:f} Tf <{row*16 + col:02X}> Tj Q\n'
-                stream += f'<{row*16 + col:02X}> Tj\n'
 
+        streams = {}
 
-        stream += '/A 3 Tf\n'
-        stream += '0.5 g\n'
-        if self.encoding != None:
-            for row in range(16):
-                for col in range(16):
-                    cc = chr(row * 16 + col)
-                    if cc in self.encoding.cc2glyphname:
-                        hexStr = self.encoding.cc2glyphname[cc][1:].encode('latin').hex()
-                        stream += f'1 0 0 1 {10 * 2 * col} {-2 * 10 * row - 4} Tm <{hexStr}> Tj\n'
+        # Print glyphs
+        for cc in self.cc2width:
 
-        stream += 'ET\n'
-        page.Contents.stream = stream
-        return page
+            # The math
+            cid = ord(cc)
+            col,row,n = cid % 16, (cid // 16 ) % 16, (cid // 256)
+            if n not in streams: streams[n] = ''
+            x,y = 10*(2*col), -2*10*row
+
+            # Paint width
+            width = self.cc2width[cc]
+            streams[n] += f'0.9 g {x} {y} {z*width} {fs} re f\n'
+
+            # Print glyph's unicode value
+            if self.font.ToUnicode != None and cc in self.cmap.cc2unicode:
+                uni = self.cmap.cc2unicode[cc]
+                uniHex = f'{ord(uni):04X}'.encode('latin').hex()
+                streams[n] += f'1 0 0 1 {10 * 2 * col} {-2 * 10 * row + 11} Tm /A 3 Tf 0.5 g <{uniHex}> Tj\n'
+
+            # Print glyph
+            Tm = ([1,0,0,-1] if invert else [1,0,0,1]) + [x, y]
+            TmString = ' '.join(f'{x}' for x in Tm)
+            cidHex = f'{cid:04X}' if self.is_cid() else f'{cid:02X}'
+            streams[n] += f'{TmString} Tm /F {z:f} Tf 0 g <{cidHex}> Tj\n'
+
+            # Print glyph name
+            if self.encoding != None and cc in self.encoding.cc2glyphname:
+                gnameHex = self.encoding.cc2glyphname[cc][1:].encode('latin').hex()
+                streams[n] += f'1 0 0 1 {10 * 2 * col} {-2 * 10 * row - 4} Tm /A 3 Tf 0.5 g <{gnameHex}> Tj\n'
+
+        pages = []
+        for n in streams:
+
+            # Set-up the page
+            page = PdfDict(
+                Type = PdfName.Page,
+                MediaBox = [20,10,360, 360],
+                Contents = IndirectPdfDict(),
+                Resources = PdfDict(Font = PdfDict(C = courier.font, A = arial.font, F = self.font))
+            )
+
+            shift = '' if n == 0 else f' +{n:X}00'
+            title = f'{self.font.Subtype} {self.name}{shift}'
+            stream  = f'1 0 0 1 40 320 cm BT 1 0 0 1 -10 30 Tm /C 10 Tf ({title}) Tj\n'
+            stream += '/C 6 Tf\n'
+            for col in range(16): stream += f'1 0 0 1 {10*(2*col) + 5} 20 Tm ({col:X}) Tj\n'
+            for row in range(16): stream += f'1 0 0 1 -10 {-10*(2*row) + 2} Tm ({row:X}) Tj\n'
+
+            stream += streams[n]
+
+            stream += 'ET\n'
+            page.Contents.stream = stream
+            pages.append(page)
+ 
+        return pages
 
     def get_type3_bbox(self):
         '''
@@ -591,7 +594,7 @@ class PdfFont:
             if proc_bbox == None: err(f'Font: {font}\nGlyph ({gname}) process stream has no d0/d1 operator:\n{proc.stream}')
             bbox = max_bbox(bbox, proc_bbox)
 
-        return PdfArray(bbox) if valid_bbox(bbox) else PdfArray([0,0,0,0])
+        return PdfArray(bbox) if valid_bbox(bbox) else PdfArray([0,0,1,1])
 
 
 # =========================================================================== class PdfFontUtils

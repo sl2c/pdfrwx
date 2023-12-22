@@ -360,7 +360,7 @@ class PdfFontCMap:
 
     # --------------------------------------------------------------------------- bfranges_to_stream()
 
-    def bfranges_to_stream(self, bfranges:list, isCid:bool):
+    def bfranges_to_stream(bfranges:list, isCid:bool):
         '''Convert CMap encoded as bfranges (list of 3-tuples of ints) to stream (str)
         '''
         w = 4 if isCid else 2
@@ -386,7 +386,7 @@ class PdfFontCMap:
         if CMapName[0] != '/' or ' ' in CMapName: err(f'invalid CMapName: {CMapName}')
         bfranges = self.to_bfranges()
         if len(bfranges) == 0: return None
-        bfrStream = self.bfranges_to_stream(bfranges,isCID)
+        bfrStream = PdfFontCMap.bfranges_to_stream(bfranges,isCID)
         bfrStreamLength = len(re.split(r'\n',bfrStream))
         return '\n'.join((
             "/CIDInit /ProcSet findresource begin",

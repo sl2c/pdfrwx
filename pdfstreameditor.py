@@ -122,7 +122,11 @@ class PdfStreamEditor:
         # It does not apply to occurrences of the byte value 32 in multiple-byte codes (PDF Ref. 1.7, sec. 5.2.2)
         Tw = cs.Tw
         font = cs.font
-        scale_x = 1/float(font.font.FontMatrix[0]) if font.font.FontMatrix != None else 0.001
+
+        # Note: the numbers in the TJ operator arguments array are displacements that are expressed
+        # in neither the text space units, nor the glyph space units:
+        # "The number is expressed in thousandths of a unit of text space" (PDF Ref sec 5.3.2)
+        scale_x = 1000
         if isinstance(s,str): s = [s]
         sMod = []
         for tok in s:
@@ -226,7 +230,7 @@ class PdfStreamEditor:
         An auxiliary function used by .print_text()
         '''
         superBox = lambda a,b: [min(a[0],b[0]), min(a[1],b[1]), max(a[2],b[2]), max(a[3],b[3])] \
-                        if a != None and b != None else None
+                        if a != None and b != None else b if a == None else a
 
         multiply = lambda a,b: [a[0]*b[0] + a[2]*b[1], a[1]*b[0] + a[3]*b[1], a[0]*b[2] + a[2]*b[3],
                     a[1]*b[2] + a[3]*b[3], a[0]*b[4] + a[2]*b[5] + a[4], a[1]*b[4] + a[3]*b[5] + a[5]] \
@@ -245,6 +249,7 @@ class PdfStreamEditor:
         
         # Editing options
         regex = options.get('regex', '')
+        regexCheckPath = options.get('regexCheckPath', None)
         removeOCR = options.get('removeOCR', False)
         render = options.get('render', False)
         edit = regex != '' or removeOCR
@@ -397,6 +402,9 @@ class PdfStreamEditor:
                         any(len(kid[1])>1 and (kid[0],kid[1][0]) == ('Tr','3') for kid in leaf[2])
                     if discardText or discardOCR:
                         print(f'Removed text: {blockText}'); isModified = True
+                        if regexCheckPath != None:
+                            with open(regexCheckPath, 'a') as file:
+                                file.write(blockText + '\n')
                         body = [l for l in leaf[2] if l[0] not in ['Tj', 'TJ', '"', "'"]]
                         outTree.append(['BT',[],body])
                     else:
