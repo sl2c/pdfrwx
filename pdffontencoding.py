@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import string, sys
+import string, sys, re
 
 from pdfrw import PdfDict, PdfName, PdfArray
 
@@ -32,29 +32,24 @@ class PdfFontEncoding:
 
         if differences != None:
 
+            self.name = '[/Differences]'
             self.cc2glyphname = PdfFontEncoding.differences_to_cc2glyphname(differences)
 
         if font != None:
 
             self.isType3 = font.Subtype == '/Type3'
 
+            # Set base encoding
             if ignoreBaseEncoding or self.isType3:
                 self.baseEncoding = None
             else:
                 try: self.baseEncoding = font.Encoding.BaseEncoding
                 except: self.baseEncoding = None
-                if self.baseEncoding not in ['/WinAnsiEncoding', '/SymbolEncoding', '/ZapfDingbatsEncoding']:
-                    self.baseEncoding = PdfFontCore14.built_in_encoding(font.BaseFont) or '/WinAnsiEncoding'
-
-            if not isinstance(font.Encoding, PdfDict) and font.Encoding not in PdfFontEncodingStandards.encodingVectors:
-
-                self.name = self.baseEncoding
-                self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.name)
-
-                if font.Encoding != None:
-                    warn(f'Font {font.BaseFont} has unrecognized /Encoding: {font.Encoding}; using {self.name}')
-
-            elif isinstance(font.Encoding, PdfDict):
+                if self.baseEncoding not in PdfFontEncodingStandards.encodingVectors: # Bad baseEncoding
+                    self.baseEncoding = '/SymbolEncoding' if re.search('sym', font.BaseFont, re.IGNORECASE) \
+                        else PdfFontCore14.built_in_encoding(font.BaseFont) or '/WinAnsiEncoding'
+                        
+            if isinstance(font.Encoding, PdfDict):
 
                 # PDF Ref. v1.7 sec. 5.5.5:
                 # If the Encoding entry is a dictionary, the table is initialized with the entries from the
@@ -70,32 +65,37 @@ class PdfFontEncoding:
                         if font.Encoding.BaseEncoding == None \
                     else PdfFontEncodingStandards.get_cc2glyphname(font.Encoding.BaseEncoding)
 
-                differencesMap = PdfFontEncoding.differences_to_cc2glyphname(font.Encoding.Differences) \
-                    if font.Encoding.Differences != None else {}
-
-                self.cc2glyphname = self.cc2glyphname | differencesMap
+                if font.Encoding.Differences != None:
+                    differencesMap = PdfFontEncoding.differences_to_cc2glyphname(font.Encoding.Differences)
+                    self.cc2glyphname = self.cc2glyphname | differencesMap
                     
                 # if font.Encoding.Differences != None:
                 #     self.cc2glyphname = PdfFontEncoding.differences_to_cc2glyphname(font.Encoding.Differences)
                 # else:
                 #     err(f'font.Encoding.Differences is missing')
 
-                self.name = [self.baseEncoding, '/Differences']
+                self.name = [font.Encoding.BaseEncoding, '/Differences']
+
+            elif font.Encoding in PdfFontEncodingStandards.encodingVectors:
+
+                self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(font.Encoding)
+                self.name = font.Encoding
 
             else:
-                if font.Subtype != '/Type0':
-                    self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(font.Encoding)
-                    if self.cc2glyphname == None:
-                        err(f'internal error for font encoding: {font.Encoding}')
-                self.name = font.Encoding
-        
-            # fd = font.FontDescriptor
-            # if fd != None and fd.CharSet != None:
-            #     self.cc2glyphname = {cc:name for cc,name in self.cc2glyphname.items() if name in fd.CharSet}
-            #     warn(f'+++++++++++++++++ creating a subset font encoding: {self.cc2glyphname}')
 
-        # set self.rmap
-        self.glyphname2cc = PdfFontEncodingStandards.invert_cc2glyphname(self.cc2glyphname, self.name)
+                self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding)
+                self.name = font.Encoding
+
+                if font.Encoding != None:
+                    warn(f'Font {font.BaseFont} has unrecognized /Encoding: {font.Encoding}; using {self.baseEncoding}')
+
+            # Limit the map
+            if font.FirstChar != None and font.LastChar != None:
+                first,last = int(font.FirstChar), int(font.LastChar)
+                self.cc2glyphname = {cc:g for cc,g in self.cc2glyphname.items() if first <= ord(cc) <= last}
+
+        # reset self.glyphname2cc
+        self.reset_glyphname2cc()
 
 
     def differences_to_cc2glyphname(differences:list):
@@ -114,7 +114,7 @@ class PdfFontEncoding:
                 i = int(d,0)
             elif d[0] == '/' and len(d)>1:
                 if i > 255: err(f'index out of range in /Differences: {differences}')
-                encMap[chr(i)] = d
+                encMap[chr(i)] = PdfName(d[1:])
                 i += 1
             else:
                 err(f'a token in /Differences is not a glyph or a number: {d}; full /Differences follow:\n{differences}')
@@ -123,7 +123,8 @@ class PdfFontEncoding:
 
     def cc2glyphname_to_differences(cc2gname:dict):
         '''
-        Encodes a cc2glyphname map as an encoding differences list
+        Encodes a cc2glyphname map as an encoding differences list.
+        Returns a tuple: (differencesList, firstChar, lastChar)
         '''
         i = -1000
         firstChar, lastChar = None, None

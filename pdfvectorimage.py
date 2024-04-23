@@ -14,7 +14,7 @@ class PdfVectorImage:
     '''An auxiliary class that contains static functions for bitonal image processing
     '''
 
-    def vectorize(obj:PdfDict, alpha = 1, upsample=False, smooth=0, vectorize=True):
+    def vectorize(obj:PdfDict, alpha = 1, upsample=False, smooth=0, vectorize=True, threshold = False):
         '''Converts PDF image xobject to vectorized PDF form xobject
         The mask may be optionally upsampled and/or smoothed; this may (or may not) increase
         the quality of the resulting vectorized form depending on the particular mask.
@@ -22,7 +22,10 @@ class PdfVectorImage:
         '''
         if obj == None or obj.Subtype != PdfName.Image: return False
         image = PdfImage.decode(obj)
-        if image == None or image.mode != '1': return False
+        if image == None: return False
+        if image.mode != '1':
+            if threshold: image = image.convert('1')
+            else: return False
 
         mask = np.array(image)
         mask = np.flipud(mask) # flip upside down since images use inverted coordinate system
@@ -123,7 +126,6 @@ class PdfVectorImage:
         UR_NONCORNER = np.logical_or(NONEDGE, np.logical_or(T!=TL, R!=BR))
         LL_NONCORNER = np.logical_or(NONEDGE, np.logical_or(B!=BR, L!=TL))
         LR_NONCORNER = np.logical_or(NONEDGE, np.logical_or(B!=BL, R!=TR))
-
 
         if preserveCorners:
             UL = np.where(edge, np.where(np.logical_and(T==L, UL_NONCORNER),L,image),image)

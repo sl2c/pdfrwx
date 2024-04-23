@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
 
-import re
+import re, sys
 from sly import Lexer, Parser
-
-from pdfrwx.common import err,warn,eprint
-
 
 # ========================================================================== class PdfStreamSyntax
 
@@ -87,7 +84,7 @@ class PdfStreamLexer(Lexer):
         return t
 
     def error(self, t):
-        eprint(f'lexing error: illegal character {t.value[0]} at index {self.index}')
+        print(f'lexing error: illegal character {t.value[0]} at index {self.index}', file=sys.stderr)
         self.index += 1
         return t
 
@@ -133,7 +130,7 @@ class PdfStreamParser(Parser):
     # ERROR token (from lexer)
     # this is different from error() func below which is called when illegal parsing state occurs
     @_('ERROR')
-    def error_token(self, p): err(f'ERROR token: {p[0]}')
+    def error_token(self, p): raise ValueError(f'ERROR token: {[p[0]]}')
 
     # Command
     @_('[ operands ] OPERATOR')
@@ -183,7 +180,6 @@ class PdfStreamParser(Parser):
 
     # Error
     def error(self, p):
-        eprint('\a\a\a\a\a')
         raise ValueError("parsing error at token %s" % str(p))
 
 

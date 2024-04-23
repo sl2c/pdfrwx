@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from math import sqrt
 
 class PdfBezier:
 
@@ -50,7 +51,8 @@ class PdfBezier:
 
 
     def decimate_bezier(self, tree:list):
-        '''Merge pairs of Bezier segments into single Bezier segments whenever this does not introduce noticeable artifacts.
+        '''
+        Merge pairs of Bezier segments into single Bezier segments whenever this does not introduce noticeable artifacts.
         '''
         if len(tree) == 0: return []
 
@@ -58,7 +60,7 @@ class PdfBezier:
         path_construction_commands_that_move_cursor = ['m','l','c','v','y']
         path_painting_commands = ['s','S','f','F','f*','B','B*','b','b*','n']
         # path_commands = path_construction_commands + path_painting_commands
-        p = lambda x: f'{round(x*1000000)/1000000:f}'.rstrip('0').rstrip('.')
+        p = lambda x: f'{round(x*1000)/1000:f}'.rstrip('0').rstrip('.')
 
         LINE_PRECISION = 0.1
         BEZIER_PRECISION = 0.1
@@ -66,7 +68,7 @@ class PdfBezier:
         x,y = None, None    # current starting coordinates
         x0,y0 = None, None  # starting coordinates at the start of the replacement curve
         x1,y1 = None, None  # first control point at the start of the replacement curve (for Bezier)
-        x2,y2 = None, None  # current ending coordinates; coptied to x,y at the end of each loop
+        x2,y2 = None, None  # current ending coordinates; copied to x,y at the end of each loop
 
         out = []
         inside = False

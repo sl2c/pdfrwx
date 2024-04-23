@@ -15,7 +15,7 @@ from PIL import Image, TiffImagePlugin, ImageChops, ImageCms
 Image.MAX_IMAGE_PIXELS = None
 
 from pdfrw import PdfObject, PdfName, PdfArray, PdfDict, IndirectPdfDict, py23_diffs
-from pdfrwx.common import err, msg, warn, eprint, get_key, encapsulate
+from pdfrwx.common import err, msg, warn, eprint, get_key, encapsulate, decapsulate
 
 # ========================================================================== PdfFilter
 
@@ -30,15 +30,17 @@ class PdfFilter:
         * /ASCIIHexDecode and /ASCII85Decode
         * /FlateDecode and /LZWDecode (all values of /Predictor are supported)
         * /RunLengthDecode
-        '''
 
-        if obj.stream == None or len(obj.stream) == 0: return obj
-        stream = py23_diffs.convert_store(obj.stream) if isinstance(obj.stream,str) else obj.stream
+        Also, checks to see if PNG predictor values (obj.DecodeParms[i].Predictor == 10..15)
+        coincide with the predictor bytes in the data stream, and if not fixes obj.DecodeParms[i].Predictor
+        values.
+        '''
+        stream = obj.stream
+        if stream == None or len(stream) == 0: return obj
+        if isinstance(stream, str): stream = py23_diffs.convert_store(stream)
 
         filters = encapsulate(obj.Filter)
         parms = encapsulate(obj.DecodeParms)
-
-        decapsulate = lambda array: array[0] if len(array) == 1 else array
 
         if obj.Subtype == '/Image':
             width, height = int(obj.Width), int(obj.Height)
@@ -95,21 +97,26 @@ class PdfFilter:
                     width_bytes = len(stream) // height
                     array = np.frombuffer(stream,dtype='uint8').reshape(height, width_bytes)
 
-                    # Fix incorrect /Predictor value, if necessary
+                    # Fix incorrect PNG /Predictor value: always set it to 15
                     if f < len(parms):
-                        predValues = set(np.transpose(array)[0])
-                        if len(predValues) == 1:
-                            predValue = next(iter(predValues)) + 10
-                            if predValue != predictor:
-                                parms[f].Predictor = predValue
-                                obj.DecodeParms = decapsulate(parms)
-                                warn(f'fixed PNG predictor: {predictor} --> {parms[f].Predictor}')
-                        else:
-                            if predictor != 15:
-                                parms[f].Predictor = 15
-                                obj.DecodeParms = decapsulate(parms)
-                                warn(f'fixed PNG predictor: {predictor} --> 15')
+                        parms[f].Predictor = 15
+                        obj.DecodeParms = decapsulate(parms)
+                        warn(f'fixed PNG predictor: {predictor} --> 15')
 
+                        # predValues = set(np.transpose(array)[0])
+                        # if len(predValues) == 1:
+                        #     predValue = next(iter(predValues)) + 10
+                        #     if predValue != predictor:
+                        #         parms[f].Predictor = predValue
+                        #         obj.DecodeParms = decapsulate(parms)
+                        #         warn(f'fixed PNG predictor: {predictor} --> {parms[f].Predictor}')
+                        # else:
+                        #     if predictor != 15:
+                        #         parms[f].Predictor = 15
+                        #         obj.DecodeParms = decapsulate(parms)
+                        #         warn(f'fixed PNG predictor: {predictor} --> 15')
+
+                    # For fastest decoding, make a PNG image from the stream and decode it using PIL
                     if colors in [1,3]:
 
                         mode = 'L' if colors == 1 else 'RGB'
@@ -138,27 +145,14 @@ class PdfFilter:
 
                     array = np.cumsum(array, axis=1, dtype = 'uint16' if bpc == 16 else 'uint8')
 
-                    stream = PdfFilter.pack_pixels(stream, width, height, colors, bpc)
+                    stream = PdfFilter.pack_pixels(array, width, height, colors, bpc)
 
                 else:
                     raise ValueError(f'unknown predictor: {predictor}')
 
             elif filter in ['/RunLengthDecode', '/RL']:
 
-                # PDF Ref. 1.7 Sec. 3.3.4
-                s = b''
-                i = 0
-                while i < len(stream):
-                    runLength = stream[i]
-                    if runLength == 128: break
-                    elif 0 <= runLength < 128:
-                        j = (i + 1) + (runLength + 1)
-                        s += stream[i+1, j]
-                        i = j
-                    else:
-                        s += stream[i+1] * (257 - runLength)
-                        i += 2
-                stream = s
+                stream = PdfFilter.rle_decode(stream)
 
             else:
                 break
@@ -169,11 +163,9 @@ class PdfFilter:
         # there should be at most 1 (image-specific) filter left
         assert len(filters) - f <= 1
 
-        uncapsulate = lambda array: array[0] if len(array) == 1 else None
-
         result = obj.copy()
-        result.Filter = uncapsulate(filters[f:])
-        result.DecodeParms = uncapsulate(parms[f:])
+        result.Filter = decapsulate(filters[f:])
+        result.DecodeParms = decapsulate(parms[f:])
         result.stream = py23_diffs.convert_load(stream)
         result.Length = len(result.stream)
 
@@ -192,20 +184,78 @@ class PdfFilter:
         this situation produces an error.
         '''
         assert 1<= bpc <=8 or bpc == 16
-        if truncate and (len(stream) - 1) * 8 == width * height * colors * bpc and stream[-1] == 10:
-            warn("truncating stream")
-            stream = stream[:-1]
-        array = np.frombuffer(stream, dtype='uint16' if bpc == 16 else 'uint8')
-        if bpc not in [8,16]:
-            assert len(stream) % height == 0
-            width_bytes = len(stream)// height
-            array = array.reshape(height, width_bytes)
-            array = np.unpackbits(array, axis=1)
-            array = array[:,:width * colors * bpc].reshape(height, width, colors, bpc)
-            array = np.packbits(array, axis=3) # bits in the upper part of byte
-        if len(array) != width * height * colors:
-            err(f'len(array) != width * height * colors ({len(array)} vs. {width} * {height} * {colors})\n' + f'{[stream]}')
+        expected_length = ( (width * colors * bpc + 7) // 8) * height
+        if len(stream) != expected_length:
+            if len(stream) == expected_length + 1 and truncate and stream[-1] == 10:
+                warn(f"truncating stream of length {len(stream)}")
+                stream = stream[:-1]
+            else:
+                err(f'expected stream length: {expected_length}, actual: {len(stream)}; stream: {[stream[:20]]}')
+        array = PdfFilter.unpack_bitstream(stream, bpc, width * colors)
         return array.reshape(height, width, colors)
+
+    # -------------------------------------------------------------------- unpack_bitstream()
+
+    def unpack_bitstream(bitStream:bytes, bitsPerSample:int, samplesPerLine:int):
+        '''
+        The bitStream is a stream of contiguous samples, each sample containing bitsPerSample bits.
+        The samples are grouped into lines so that no padding is added between samples within a line,
+        while the end of each line is padded to a byte.
+        Thus, if padding is done only at the very end of the bitstream then samplesPerLine is the total
+        number of samples contained in the bitstream.
+
+        Returns a 2D array of shape (-1,samplesPerLine), whose dtype one of '>u1', '>u2' or '>u4'
+        and is just large enough to accommodate bitsPerSample bits.
+        '''
+        dtypes = {1:np.dtype('>u1'), 2:np.dtype('>u2'), 4:np.dtype('>u4')}
+
+        assert bitsPerSample <= 32
+
+        if bitsPerSample in [8, 16, 32]:
+            return np.frombuffer(bitStream, dtype=dtypes.get(bitsPerSample//8))
+
+        # Some math
+        # nBits = len(bitStream) * 8
+        bytesPerLine = (samplesPerLine * bitsPerSample + 7) // 8
+        nLines = len(bitStream) // bytesPerLine
+        if bytesPerLine > 1 and len(bitStream) % bytesPerLine != 0:
+            raise ValueError(f'incommensurate stream length {len(bitStream)} and bytes-per-line: {bytesPerLine}')
+        bytesPerSample = (bitsPerSample + 7) // 8
+        if bytesPerSample == 3: bytesPerSample = 4 # no uint24 in numpy
+        dtype = dtypes.get(bytesPerSample)
+        padBitsPerSample = bytesPerSample * 8 - bitsPerSample
+
+        # Some numpy
+        byte_array = np.frombuffer(bitStream, dtype='uint8')
+        bit_array = np.unpackbits(byte_array).reshape(nLines,-1)[:, :samplesPerLine * bitsPerSample]
+        bit_array = bit_array.reshape(nLines, samplesPerLine, bitsPerSample)
+        bit_array_padded = np.pad(bit_array,
+                                  pad_width=((0,0),(0,0),(padBitsPerSample, 0)),
+                                  constant_values=((0,0),(0,0),(0,0)))
+        byte_array = np.packbits(bit_array_padded.flatten())
+        samples = np.frombuffer(byte_array.tobytes(), dtype = dtype)
+
+        return samples.reshape(nLines,samplesPerLine)
+
+    # -------------------------------------------------------------------- pack_bitstream()
+
+    def pack_bitstream(array:np.ndarray, bitsPerSample:int, padLines = False):
+        '''
+        Packs array into a bitstream.
+        '''
+        byte_array = np.frombuffer(array.tobytes(order = 'big'), dtype='uint8')
+        bit_array = np.unpackbits(byte_array).reshape(array.shape + (-1,))[...,-bitsPerSample:]
+        if padLines:
+            bit_array = bit_array.reshape(array.shape[0],-1)
+            pad_bits = (8 - (bit_array.shape[1] % 8)) % 8
+            bit_array_padded = np.pad(bit_array, pad_width=((0,0),(0,pad_bits)),constant_values=((0,0),(0,0)))
+        else:
+            pad_bits = (8 - (array.size * bitsPerSample % 8)) % 8
+            bit_array_padded = np.pad(bit_array.flatten(), pad_width=(0,pad_bits),constant_values=(0,0))
+        return np.packbits(bit_array_padded).tobytes()
+
+
+
 
     # -------------------------------------------------------------------- pack_pixels()
 
@@ -235,14 +285,14 @@ class PdfFilter:
 
         PNG_header = bytes([137,80,78,71,13,10,26,10])
 
-        print([width, height, bpc, color_type])
+        # print([width, height, bpc, color_type])
 
         IHDR = PdfFilter.make_png_chunk(b'IHDR', struct.pack(b'!LLBBBBB', width, height, bpc, color_type, 0, 0, 0))
         PLTE = PdfFilter.make_png_chunk(b'PLTE', palette) if mode == 'P' else b''
         IDAT = PdfFilter.make_png_chunk(b'IDAT', stream)
         IEND = PdfFilter.make_png_chunk(b'IEND', b'')
 
-        msg(f'Length of PLTE: {len(PLTE)}')
+        # msg(f'Length of PLTE: {len(PLTE)}')
         return Image.open(BytesIO(PNG_header + IHDR + PLTE + IDAT + IEND))
 
     def make_png_chunk(chunk_type:bytes, chunk_data:bytes):
@@ -250,6 +300,49 @@ class PdfFilter:
         chunk_crc = struct.pack('!L',zlib.crc32(chunk_type + chunk_data))
         return chunk_len + chunk_type + chunk_data + chunk_crc
 
+    # -------------------------------------------------------------------- rle_decode()
+
+    def rle_decode(string:bytes):
+        # PDF Ref. 1.7 Sec. 3.3.4
+        s = b''
+        i = 0
+        while i < len(string):
+            runLength = string[i]
+            if runLength == 128: break
+            elif 0 <= runLength < 128:
+                j = (i + 1) + (runLength + 1)
+                s += string[i+1, j]
+                i = j
+            else:
+                s += string[i+1] * (257 - runLength)
+                i += 2
+        string = s
+
+    # -------------------------------------------------------------------- rle_encode()
+
+    def rle_encode(string:bytes):
+        # PDF Ref. 1.7 Sec. 3.3.4
+        i,j,N = 0,1,len(string)
+        MAX_SEQ_LENGTH = 128
+
+        runs = []
+        while i<N:
+            while j<N and string[j] == string[i] and j-i < MAX_SEQ_LENGTH: j += 1
+            runs.append((string[i],j-i))
+            i,j = j,j+1
+
+        seq = b''
+        result = b''
+        for char, runLength in runs:
+            if len(seq) + runLength <= MAX_SEQ_LENGTH and (len(seq) == 0 and runLength < 2 or runLength < 3):
+                seq += bytes([char]) * runLength
+            else:
+                if len(seq)>0: result += bytes([len(seq)-1]) + seq; seq = b''
+                result += bytes([257 - runLength, char])
+        if len(seq)>0: result += bytes([len(seq)-1]) + seq
+
+        return result
+    
     # -------------------------------------------------------------------- lzw_decode()
 
     def lzw_decode(byteString:bytes, earlyChange = 1):
@@ -264,7 +357,6 @@ class PdfFilter:
 
         # The initial state and the error
         INIT = (None, [bytes([i]) for i in range(256)] + [None, None]) 
-        CODE_ERROR = lambda: ValueError(f'bad code: {code}, table length: {L:X}')
 
         bits = ''.join(f'{byte:08b}' for byte in byteString) # The byteString as a string of 0s and 1s
         prev_string, table = INIT
@@ -287,7 +379,7 @@ class PdfFilter:
                 pass
             else:
                 if code > L or code == L and prev_string == None:
-                    raise CODE_ERROR
+                    raise ValueError(f'bad code: {code}, table length: {L:X}')
                 if code == L:
                     table.append(prev_string + prev_string[:1])
                 string = table[code]

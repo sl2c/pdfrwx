@@ -77,6 +77,7 @@ class DjVuSedEditor:
                 if len(textUnicode) == 0: continue
                 pdfString = font.encodePdfTextString(textUnicode)
                 stringWidth = font.width(textUnicode)
+                if stringWidth == 0: continue
 
                 scale_x = int(round(font.scaleFactor*(float(xmax)-float(xmin))/stringWidth))
 
@@ -124,7 +125,6 @@ class DjVuSedEditor:
             pdfPage = pdf.pages[pageNo-1]
 
             # Remove old OCR
-            stream = ''.join(PdfFilter.uncompress(c).stream for c in encapsulate(pdfPage.contents))
             resources = pdfPage.inheritable.Resources
             if resources == None: resources = PdfDict(); pdfPage.Resources = resources
             pdfEditor = PdfStreamEditor(pdfPage, PdfFontGlyphMap())

@@ -79,7 +79,7 @@ class PdfFontGlyphMap:
         '''
         suffix_type = lambda suffix: self.DEX if all(c in string.digits for c in suffix) else self.HEX
 
-        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|Char|glyph|MT|.*\.g)([0-9a-fA-F]+)$',r'\1|||\2',gname)
+        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|Char|char|glyph|MT|\\rm|.*\.g)([0-9a-fA-F]+)$',r'\1|||\2',gname)
         gname_split = re.split(r'\|\|\|',gname_marked)
         prefix,suffix = gname_split if len(gname_split) == 2 else (None,None)
         if prefix == None: return None
@@ -89,18 +89,17 @@ class PdfFontGlyphMap:
             self.prefix_types[prefix] = suffix_t
 
         i = int(suffix,16) if self.prefix_types[prefix] == self.HEX else int(suffix)
-        return chr(i) if i <= PdfFontCMap.UNICODE_BMP_MAX else None
+        try: return chr(i)
+        except: return None
 
     # --------------------------------------------------------------------------- make_cmap()
 
-    def make_cmap(self, encoding:PdfFontEncoding):
+    def make_cmap(self, encoding:PdfFontEncoding, mapComposites = True):
         '''
         Create an instance of PdfFontCMap from an instance of PdfFontEncoding by attempting to map
         glyph names to Unicode points.
         '''
         stdGlyphMap = PdfFontGlyphMapStandards.get_glyphName2unicodeMap(encoding.name)
-        t3map1 = {c:i for i,c in enumerate('ABCDEFGH')}
-        t3map2 = {c:i for i,c in enumerate('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')}
 
         cmap = PdfFontCMap()
         unrecognized = {}
@@ -108,42 +107,69 @@ class PdfFontGlyphMap:
         # Count the number of 'weird' glyphs - glyphs whose names start with '/;'
         # weird_count = len([v for v in encoding.cc2glyphname.values() if v[:2] == '/;'])
 
-        semicolons = {';':';', ';;':chr(0), ';;;;':chr(0), ';;;;;;;;':';'}
-
         for cc, gname in encoding.cc2glyphname.items():
+
             if gname == '/.notdef': continue
+
             unicode = None
-                
             if encoding.isType3:
-                if gname[1:] in semicolons:
-                    unicode = semicolons[gname[1:]]
-                    warn(f'mapping {gname} --> {[unicode]}')
-                elif len(gname) == 3:
-                    try: unicode = chr(t3map1[gname[1]] * 36 + t3map2[gname[2]])
-                    except: unicode = None
-                elif len(gname) == 4 and gname[1] == '#':
-                    try: unicode = chr(int(gname[2:],16))
-                    except: unicode = None
-                        
+                if gname == '/BnZr': unicode = chr(0) # This is how chr(0) is sometimes denoted in Type3 fonts
+                if cc == ';' and gname[1:] in [';', ';;', ';;;;', ';;;;;;;;']: unicode = ';'
+                if cc == chr(0) and gname == '/?': unicode = chr(0)
+                if unicode != None: warn(f'mapping {gname} --> {[unicode]}')
+ 
             if unicode == None:
-                g = PdfFontGlyphMap.strip_dot_endings(gname)
-                unicode = stdGlyphMap.get(g) or self.glyphMap.get(g)
-                if unicode != None: cmap.cc2unicode[cc] = unicode ; continue
-                composite = g[1:]
-                unicode = chr(int(composite)) if all(c in string.digits for c in composite) \
-                    else composite if len(composite) == 1 \
-                    else self.composite_glyphname_to_unicode(composite)
-                if unicode == None:
-                    unrecognized[ord(cc)] = gname
-                    unicode = cc
-            
-            cmap.cc2unicode[cc] = unicode
+                unicode = self.gname_to_unicode(gname, stdGlyphMap = stdGlyphMap, isType3 = encoding.isType3,
+                                                    mapComposites = mapComposites)
+            if unicode != None:
+                cmap.cc2unicode[cc] = unicode
+            else:
+                unrecognized[ord(cc)] = gname
 
         cmap.reset_unicode2cc()
         if len(unrecognized) > 0:
             u = ' '.join(unrecognized.values())
             warn(f'unrecognized glyph names: {u}')
         return cmap
+
+    def gname_to_unicode(self, gname, stdGlyphMap = {}, isType3 = False, mapComposites = True):
+        '''
+        Convert glyph name to Unicode
+        '''
+
+        unicode = None
+            
+        if isType3:
+
+            t3map1 = {c:i for i,c in enumerate('ABCDEFGH')}
+            t3map2 = {c:i for i,c in enumerate('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')}
+            # semicolons = {';':';', ';;':chr(0), ';;;;':chr(0), ';;;;;;;;':';'}
+            semicolons = {';':chr(0), ';;':';', ';;;;':chr(0), ';;;;;;;;':';'}
+
+            if gname[1:] in semicolons:
+                unicode = semicolons[gname[1:]]
+                warn(f'mapping {gname} --> {[unicode]}')
+            elif len(gname) == 3:
+                try: unicode = chr(t3map1[gname[1]] * 36 + t3map2[gname[2]])
+                except: unicode = None
+            elif len(gname) == 4 and gname[1] == '#':
+                try: unicode = chr(int(gname[2:],16))
+                except: unicode = None
+                    
+        if unicode == None:
+
+            g = PdfFontGlyphMap.strip_dot_endings(gname)
+            unicode = self.glyphMap.get(g) or stdGlyphMap.get(g) # Check external glyph map first
+
+            if unicode == None and mapComposites:
+
+                composite = g[1:]
+                unicode = chr(int(composite)) if all(c in string.digits for c in composite) \
+                    else composite if len(composite) == 1 \
+                    else self.composite_glyphname_to_unicode(composite)
+
+        return unicode
+
 
     # --------------------------------------------------------------------------- reencode_cmap()
 
@@ -173,7 +199,7 @@ class PdfFontGlyphMap:
     def strip_dot_endings(s:str):
         '''Strips ._, .sc & .cap endings from a string; useful to match variants (small caps etc) of glyph names in glyph lists
         '''
-        s1 = re.sub(r'(\._|\.sc|\.cap|\.alt[0-9]|\.disp|\.ts1)$','',s)
+        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|disp|big|ts1|lf))+$','',s)
         return s1 if len(s1)>1 else s
 
 
@@ -204,7 +230,9 @@ class PdfFontGlyphMapStandards:
             '/ZapfDingbatsEncoding':'ZapfDingbatsSet',
             '/MacExpertEncoding':'MacExpertSet'
         }
-        encodingName = encodingName if not isinstance(encodingName, PdfArray) else encodingName[0]
+        encodingName = encodingName \
+            if not isinstance(encodingName, PdfArray) and not isinstance(encodingName, list) \
+            else encodingName[0]
         glyphName2unicodeMapUnion = PdfFontGlyphMapStandards.glyphName2unicodeMaps['LatinSet'] \
                     | PdfFontGlyphMapStandards.glyphName2unicodeMaps['MacExpertSet'] \
                     | PdfFontGlyphMapStandards.glyphName2unicodeMaps['SymbolSet']

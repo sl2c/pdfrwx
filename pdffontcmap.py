@@ -14,7 +14,8 @@ from pdfrwx.pdffilter import PdfFilter
 class PdfFontCMap:
 
     PUP15 = "\U000F0000" # Start of PUP (15): https://en.wikipedia.org/wiki/Private_Use_Areas
-    UNICODE_BMP_MAX=55295 # Maximum unicode point in the Basic Multilingual Plane (BMP) == U+D7FF
+    SURROGATES_START = "\uD800" # Maximum unicode point in the Basic Multilingual Plane (BMP) == U+D7FF
+    SURROGATES_END = "\uDFFF"
 
     # --------------------------------------------------------------------------- __init__()
 
@@ -35,7 +36,10 @@ class PdfFontCMap:
         '''Sets self.cc2unicode equal to the identity map: cc -> cc for cc in range(self.UNICODE_BMP_MAX+1)
         '''
         self.cc2unicode = {}
-        for cc in range(self.UNICODE_BMP_MAX+1): self.cc2unicode[chr(cc)] = chr(cc)
+        sur_start, sur_end = ord(self.SURROGATES_START), ord(self.SURROGATES_END)
+        for cc in range(65536):
+            if sur_start <= cc <= sur_end: continue
+            self.cc2unicode[chr(cc)] = chr(cc)
         self.reset_unicode2cc()
 
     # --------------------------------------------------------------------------- read_to_unicode_stream()
@@ -52,9 +56,12 @@ class PdfFontCMap:
             # stream = PdfFilter.uncompress(ToUnicode).stream
             try:
                 stream = PdfFilter.uncompress(ToUnicode).stream
-            except:
-                warn(f"failed to decompress the font's ToUnicode CMap: {ToUnicode}")
-                return
+            except Exception as e:
+                s = ToUnicode.stream
+                ss = s[:10] + '..' + s[-10:]
+                ee = f"failed to decompress the font's ToUnicode CMap: {ToUnicode}, stream: {repr(ss)}"
+                warn(e); warn(ee); raise ValueError(ee)
+                
         self.cc2unicode = {}
 
         # process bfranges
@@ -179,11 +186,12 @@ class PdfFontCMap:
         '''Create a CMap from a bfr file
         '''
         self.cc2unicode = {}
-        start,stop = -1,-1
+        start,start2, stop = -1,-1,-1
         with open(bfrFilePath, 'r') as f:
             for line in f:
-                line = line.rstrip(' \r\t\n') # strip end-of-line spaces
-                if line == '' or line[0] == '#': continue # skip empty lines and comments
+                line = re.sub(r'#[ ]+.*', '', line) # strip comments
+                line = line.rstrip('\r\n ') # strip end-of-line chars
+                if line == '': continue
                 if line[0] == '<' and line[-1]== '>':
                     try:
                         lineSplit = re.split(r'>\s*<',line.strip('<>'))
@@ -204,13 +212,55 @@ class PdfFontCMap:
                             err(f'bad line in a bfr file: {line}')
                     except:
                         err(f'bad line in a bfr file: {line}')
-                elif len(line) <= 16:
+                elif len(line) <= 16 and start2 != -1:
+                    if len(line) < 16: line = line + ' '*(16-len(line))
                     for i in range(len(line)):
                         if line[i] != '.': self.cc2unicode[chr(start2 + i)] = line[i]
                     start2 += 16
                 else:
                     err(f'bad line in a bfr file: {line}')
         self.reset_unicode2cc()
+
+    # --------------------------------------------------------------------------- write_bfr_file()
+
+    def write_bfr_file(self, bfrFilePath:str):
+        '''
+        Write CMap to a bfr file using the compact format
+        '''
+        cc2u = self.cc2unicode
+        s = "# dots '.' mean '.notdef'; to encode the dot per se, use e.g.: <002E><002E><002E>\n"
+        skip = False
+        keys = sorted(cc2u.keys())
+        if len(keys) == 0: return s
+
+        special = [i for i in range(32)] + [i for i in range(0x7f,0xa0)] + [0xad]
+        special = [chr(i) for i in special]
+        triples = {}
+        row_first, row_last = ord(keys[0])//16, (ord(keys[-1])+15)//15
+        for row in range(row_first, row_last):
+            line = ''
+            for col in range(16):
+                cc = chr(row*16 + col)
+                if cc not in cc2u: line += '.'; continue
+                u = cc2u[cc]
+                if u in special or len(u) != 1: line += '.'; triples[cc] = u; continue
+                line += u
+            if line == '.'*16: skip = True; continue
+            if skip or row % 16 == 0: s += f'<{row*16:04X}>\n'
+            s += line + '\n'
+            skip = False
+ 
+        dotLines = ''.join(f'<{ord(cc):04X}><{ord(cc):04X}><002E>\n' for cc in cc2u if cc2u[cc] == '.')
+        if dotLines != '':
+            s += '# The dot\n' + dotLines
+
+        if len(triples) > 0:
+            s += '# Special & multibyte chars\n'
+            for cc,u in triples.items():
+                s += f'<{ord(cc):04X}><{ord(cc):04X}><{PdfFontCMap.Unicode_to_UTF16BE(u)}>\n'
+
+        with open(bfrFilePath, 'wt') as f:
+            f.write(s)
 
     # --------------------------------------------------------------------------- read_diff_block_list()
 
@@ -293,7 +343,7 @@ class PdfFontCMap:
         '''Converts a Unicode string to a utf-16be-encoded hex string
         '''
         # return unicodeStr.encode('utf-16-be','surrogatepass').hex()
-        return unicodeStr.encode('utf-16-be').hex()
+        return unicodeStr.encode('utf-16-be').hex().upper()
 
     # --------------------------------------------------------------------------- decode()
 
