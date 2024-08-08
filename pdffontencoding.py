@@ -2,10 +2,11 @@
 
 import string, sys, re
 
-from pdfrw import PdfDict, PdfName, PdfArray
+from pdfrw import PdfDict, PdfName, PdfArray, py23_diffs
 
-from pdfrwx.common import err, msg, warn
-from pdfrwx.pdffontcore14 import PdfFontCore14
+from .common import err, msg, warn
+from .pdffontcore14 import PdfFontCore14
+from .pdffilter import PdfFilter
 
 # =========================================================================== class PdfFontEncoding
 
@@ -13,13 +14,20 @@ class PdfFontEncoding:
 
     # --------------------------------------------------------------------------- __init__()
 
-    def __init__(self, name:str=None, differences:list=None, font:PdfDict=None, ignoreBaseEncoding = False):
+    def __init__(self,
+                 name:str = None,
+                 differences:list = None,
+                 font:PdfDict = None,
+                 ignoreBaseEncoding = False,
+                 gid2gname:dict = None):
         '''Creates an instance of the PdfFontEncoding class from the name of the encoding,
         a /Differences list or from a PDF font dict.
         '''
         self.name = None
         self.isType3 = False
-        self.baseEncoding = '/WinAnsiEncoding'
+        self.baseEncoding = None
+
+        # self.baseEncoding = '/WinAnsiEncoding'
 
         self.cc2glyphname = {} # A map from character codes (chars) to glyph names
         self.glyphname2cc = {} # A reverse map from glyph names to character codes (chars)
@@ -37,19 +45,38 @@ class PdfFontEncoding:
 
         if font != None:
 
-            self.isType3 = font.Subtype == '/Type3'
+            assert font.Subtype != '/Type0' # SIMPLE font
 
-            # Set base encoding
-            if ignoreBaseEncoding or self.isType3:
-                self.baseEncoding = None
-            else:
-                try: self.baseEncoding = font.Encoding.BaseEncoding
-                except: self.baseEncoding = None
-                if self.baseEncoding not in PdfFontEncodingStandards.encodingVectors: # Bad baseEncoding
-                    self.baseEncoding = '/SymbolEncoding' if re.search('sym', font.BaseFont, re.IGNORECASE) \
-                        else PdfFontCore14.built_in_encoding(font.BaseFont) or '/WinAnsiEncoding'
+            self.isType3 = font.Subtype == '/Type3'
+            self.cc2glyphname = {}
+
+            fd = font.FontDescriptor
+            isEmbedded = fd and (fd.FontFile or fd.FontFile2 or fd.FontFile3)
                         
             if isinstance(font.Encoding, PdfDict):
+
+                # PDF Ref. v1.7 sec. 5.5.5:
+                # The base encoding [is] the encoding from which the Differences
+                # entry (if present) describes differences—specified as the name of a predefined
+                # encoding MacRomanEncoding, MacExpertEncoding, or WinAnsiEncoding (see Appendix D).
+                # If this entry is absent, the Differences entry describes differences from an implicit
+                # base encoding. For a font program that is embedded in the PDF file, the implicit base
+                # encoding is the font program’s built-in encoding, as described above and further
+                # elaborated in the sections on specific font types below. Otherwise, for a nonsymbolic font,
+                # it is StandardEncoding, and for a symbolic font, it is the font’s built-in encoding.
+
+                if not ignoreBaseEncoding and not self.isType3:
+
+
+                    self.baseEncoding = font.Encoding.BaseEncoding if font.Encoding.BaseEncoding \
+                        else PdfFontCore14.built_in_encoding(font.BaseFont) if not isEmbedded \
+                        else None
+
+                    if self.baseEncoding:
+                        self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding)
+                    elif gid2gname:
+                        self.cc2glyphname = {gid:PdfName(gname) for gid,gname in gid2gname.items()}
+                        
 
                 # PDF Ref. v1.7 sec. 5.5.5:
                 # If the Encoding entry is a dictionary, the table is initialized with the entries from the
@@ -59,40 +86,30 @@ class PdfFontEncoding:
                 # so do likewise except fot Type3 fonts, for which we know for sure that the only
                 # chars that are present in the font are those in the /Encoding entry.
 
-                self.cc2glyphname = {} \
-                        if ignoreBaseEncoding or self.isType3 \
-                    else PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding) \
-                        if font.Encoding.BaseEncoding == None \
-                    else PdfFontEncodingStandards.get_cc2glyphname(font.Encoding.BaseEncoding)
-
                 if font.Encoding.Differences != None:
                     differencesMap = PdfFontEncoding.differences_to_cc2glyphname(font.Encoding.Differences)
                     self.cc2glyphname = self.cc2glyphname | differencesMap
                     
-                # if font.Encoding.Differences != None:
-                #     self.cc2glyphname = PdfFontEncoding.differences_to_cc2glyphname(font.Encoding.Differences)
-                # else:
-                #     err(f'font.Encoding.Differences is missing')
-
-                self.name = [font.Encoding.BaseEncoding, '/Differences']
-
-            elif font.Encoding in PdfFontEncodingStandards.encodingVectors:
-
-                self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(font.Encoding)
-                self.name = font.Encoding
+                self.name = [font.Encoding.BaseEncoding, '/Differences' if font.Encoding.Differences != None else None]
 
             else:
 
-                self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding)
+                encoding = font.Encoding if font.Encoding \
+                            else PdfFontCore14.built_in_encoding(font.BaseFont) if not isEmbedded \
+                            else None
+
+                if encoding:
+                    self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(encoding)
+                elif gid2gname:
+                    self.cc2glyphname = {gid:PdfName(gname) for gid,gname in gid2gname.items()}
+
                 self.name = font.Encoding
 
-                if font.Encoding != None:
-                    warn(f'Font {font.BaseFont} has unrecognized /Encoding: {font.Encoding}; using {self.baseEncoding}')
-
-            # Limit the map
+            # Limit the map; ??? DO WE REALLY WANT THIS ???
             if font.FirstChar != None and font.LastChar != None:
                 first,last = int(font.FirstChar), int(font.LastChar)
                 self.cc2glyphname = {cc:g for cc,g in self.cc2glyphname.items() if first <= ord(cc) <= last}
+
 
         # reset self.glyphname2cc
         self.reset_glyphname2cc()
@@ -145,15 +162,15 @@ class PdfFontEncoding:
 
     def conjugate(self, encoding:'PdfFontEncoding'):
         '''
-        Using self and encoding, creates and returns a tuple (reEncMap, diffEncoding):
+        Using `self` and `encoding`, creates and returns a tuple (`reEncMap`, `diffEncoding`):
 
-        * reEncMap is a map that maps character codes cc --> reEncMap(cc) in such a way that
-        self.cc2glyphname[cc] == encoding.cc2glyphname(reEncMap(cc)) for any cc for which both
+        * `reEncMap` is a map that maps character codes `cc --> reEncMap(cc)` in such a way that
+        `self.cc2glyphname[cc] == encoding.cc2glyphname(reEncMap(cc))` for any `cc` for which both
         sides of the equality are defined.
-        * diffEncoding is essentially equal to self except that the mappings of all character codes
-        such that self.cc2glyphname is in encoding.cc2glyphname.values() are removed from it. So, in other words,
-        if E is the image of the encoding, i.e. a set of all glyph names that the encoding maps to, then
-        diffEncoding is that part of self that ony maps to glyph names that are not in E.
+        * `diffEncoding` is essentially equal to self with the mappings of all character codes
+        such that `self.cc2glyphname` is in `encoding.cc2glyphname.values()` removed from it. So, in other words,
+        if `E` is the image of the `encoding`, i.e. a set of all glyph names that the `encoding` maps to, then
+        `diffEncoding` is that part of `self` that ony maps to glyph names that are not in `E`.
         '''
         reEncMap = {}
         cc2glyphname = {}
@@ -216,41 +233,23 @@ class PdfFontEncodingStandards:
     encodingVectors = {}
 
     encodingVectors['/WinAnsiEncoding'] = (
-        None, None, None, None, None, None, None, None, None, None, None, None,
-        None, None, None, None, None, None, None, None, None, None, None, None,
-        None, None, None, None, None, None, None, None, 'space', 'exclam',
-        'quotedbl', 'numbersign', 'dollar', 'percent', 'ampersand',
-        'quotesingle', 'parenleft', 'parenright', 'asterisk', 'plus', 'comma',
-        'hyphen', 'period', 'slash', 'zero', 'one', 'two', 'three', 'four',
-        'five', 'six', 'seven', 'eight', 'nine', 'colon', 'semicolon', 'less',
-        'equal', 'greater', 'question', 'at', 'A', 'B', 'C', 'D', 'E', 'F',
-        'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S', 'T',
-        'U', 'V', 'W', 'X', 'Y', 'Z', 'bracketleft', 'backslash', 'bracketright',
-        'asciicircum', 'underscore', 'grave', 'a', 'b', 'c', 'd', 'e', 'f',
-        'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't',
-        'u', 'v', 'w', 'x', 'y', 'z', 'braceleft', 'bar', 'braceright',
-        'asciitilde', 'bullet', 'Euro', 'bullet', 'quotesinglbase', 'florin',
-        'quotedblbase', 'ellipsis', 'dagger', 'daggerdbl', 'circumflex',
-        'perthousand', 'Scaron', 'guilsinglleft', 'OE', 'bullet', 'Zcaron',
-        'bullet', 'bullet', 'quoteleft', 'quoteright', 'quotedblleft',
-        'quotedblright', 'bullet', 'endash', 'emdash', 'tilde', 'trademark',
-        'scaron', 'guilsinglright', 'oe', 'bullet', 'zcaron', 'Ydieresis',
-        'space', 'exclamdown', 'cent', 'sterling', 'currency', 'yen', 'brokenbar',
-        'section', 'dieresis', 'copyright', 'ordfeminine', 'guillemotleft',
-        'logicalnot', 'hyphen', 'registered', 'macron', 'degree', 'plusminus',
-        'twosuperior', 'threesuperior', 'acute', 'mu', 'paragraph', 'periodcentered',
-        'cedilla', 'onesuperior', 'ordmasculine', 'guillemotright', 'onequarter',
-        'onehalf', 'threequarters', 'questiondown', 'Agrave', 'Aacute',
-        'Acircumflex', 'Atilde', 'Adieresis', 'Aring', 'AE', 'Ccedilla',
-        'Egrave', 'Eacute', 'Ecircumflex', 'Edieresis', 'Igrave', 'Iacute',
-        'Icircumflex', 'Idieresis', 'Eth', 'Ntilde', 'Ograve', 'Oacute',
-        'Ocircumflex', 'Otilde', 'Odieresis', 'multiply', 'Oslash', 'Ugrave',
-        'Uacute', 'Ucircumflex', 'Udieresis', 'Yacute', 'Thorn', 'germandbls',
-        'agrave', 'aacute', 'acircumflex', 'atilde', 'adieresis', 'aring', 'ae',
-        'ccedilla', 'egrave', 'eacute', 'ecircumflex', 'edieresis', 'igrave',
-        'iacute', 'icircumflex', 'idieresis', 'eth', 'ntilde', 'ograve', 'oacute',
-        'ocircumflex', 'otilde', 'odieresis', 'divide', 'oslash', 'ugrave', 'uacute',
-        'ucircumflex', 'udieresis', 'yacute', 'thorn', 'ydieresis')
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        None, None, None, None, None, None, None, None, None, None, None, None, None, None, None, None,
+        'space', 'exclam', 'quotedbl', 'numbersign', 'dollar', 'percent', 'ampersand', 'quotesingle', 'parenleft', 'parenright', 'asterisk', 'plus', 'comma', 'hyphen', 'period', 'slash',
+        'zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'colon', 'semicolon', 'less', 'equal', 'greater', 'question',
+        'at', 'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O',
+        'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', 'bracketleft', 'backslash', 'bracketright', 'asciicircum', 'underscore',
+        'grave', 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o',
+        'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z', 'braceleft', 'bar', 'braceright', 'asciitilde', 'bullet',
+        'Euro', 'bullet', 'quotesinglbase', 'florin', 'quotedblbase', 'ellipsis', 'dagger', 'daggerdbl', 'circumflex', 'perthousand', 'Scaron', 'guilsinglleft', 'OE', 'bullet', 'Zcaron', 'bullet',
+        'bullet', 'quoteleft', 'quoteright', 'quotedblleft', 'quotedblright', 'bullet', 'endash', 'emdash', 'tilde', 'trademark', 'scaron', 'guilsinglright', 'oe', 'bullet', 'zcaron', 'Ydieresis',
+        'space', 'exclamdown', 'cent', 'sterling', 'currency', 'yen', 'brokenbar', 'section', 'dieresis', 'copyright', 'ordfeminine', 'guillemotleft', 'logicalnot', 'hyphen', 'registered', 'macron',
+        'degree', 'plusminus', 'twosuperior', 'threesuperior', 'acute', 'mu', 'paragraph', 'periodcentered', 'cedilla', 'onesuperior', 'ordmasculine', 'guillemotright', 'onequarter', 'onehalf', 'threequarters', 'questiondown',
+        'Agrave', 'Aacute', 'Acircumflex', 'Atilde', 'Adieresis', 'Aring', 'AE', 'Ccedilla', 'Egrave', 'Eacute', 'Ecircumflex', 'Edieresis', 'Igrave', 'Iacute', 'Icircumflex', 'Idieresis',
+        'Eth', 'Ntilde', 'Ograve', 'Oacute', 'Ocircumflex', 'Otilde', 'Odieresis', 'multiply', 'Oslash', 'Ugrave', 'Uacute', 'Ucircumflex', 'Udieresis', 'Yacute', 'Thorn', 'germandbls',
+        'agrave', 'aacute', 'acircumflex', 'atilde', 'adieresis', 'aring', 'ae', 'ccedilla', 'egrave', 'eacute', 'ecircumflex', 'edieresis', 'igrave', 'iacute', 'icircumflex', 'idieresis',
+        'eth', 'ntilde', 'ograve', 'oacute', 'ocircumflex', 'otilde', 'odieresis', 'divide', 'oslash', 'ugrave', 'uacute', 'ucircumflex', 'udieresis', 'yacute', 'thorn', 'ydieresis'
+    )
 
     encodingVectors['/MacRomanEncoding'] = (
         None, None, None, None, None, None, None, None, None, None, None, None,
@@ -337,20 +336,24 @@ class PdfFontEncodingStandards:
         'a178', 'a179', 'a193', 'a180', 'a199', 'a181', 'a200', 'a182', None, 'a201', 'a183', 'a184',
         'a197', 'a185', 'a194', 'a198', 'a186', 'a195', 'a187', 'a188', 'a189', 'a190', 'a191', None)
 
-    encodingVectors['/StandardEncoding']=(None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,"space","exclam",
-        "quotedbl","numbersign","dollar","percent","ampersand","quoteright","parenleft","parenright","asterisk","plus",
-        "comma","hyphen","period","slash","zero","one","two","three","four","five","six","seven","eight","nine","colon",
-        "semicolon","less","equal","greater","question","at","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O",
+    encodingVectors['/StandardEncoding']=(
+        None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,
+        None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,
+        "space","exclam","quotedbl","numbersign","dollar","percent","ampersand","quoteright","parenleft","parenright","asterisk","plus","comma","hyphen","period","slash",
+        "zero","one","two","three","four","five","six","seven","eight","nine","colon","semicolon","less","equal","greater","question",
+        "at","A","B","C","D","E","F","G","H","I","J","K","L","M","N","O",
         "P","Q","R","S","T","U","V","W","X","Y","Z","bracketleft","backslash","bracketright","asciicircum","underscore",
-        "quoteleft","a","b","c","d","e","f","g","h","i","j","k","l","m","n","o","p","q","r","s","t","u","v","w","x","y",
-        "z","braceleft","bar","braceright","asciitilde",None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,
-        None,None,None,"exclamdown","cent","sterling","fraction","yen","florin","section","currency","quotesingle","quotedblleft",
-        "guillemotleft","guilsinglleft","guilsinglright","fi","fl",None,"endash","dagger","daggerdbl","periodcentered",None,
-        "paragraph","bullet","quotesinglbase","quotedblbase","quotedblright","guillemotright","ellipsis","perthousand",
-        None,"questiondown",None,"grave","acute","circumflex","tilde","macron","breve","dotaccent","dieresis",None,"ring",
-        "cedilla",None,"hungarumlaut","ogonek","caron","emdash",None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,"AE",None,"ordfeminine",
-        None,None,None,None,"Lslash","Oslash","OE","ordmasculine",None,None,None,None,None,"ae",None,None,None,"dotlessi",None,None,"lslash","oslash",
-        "oe","germandbls",None,None,None,None)
+        "quoteleft","a","b","c","d","e","f","g","h","i","j","k","l","m","n","o",
+        "p","q","r","s","t","u","v","w","x","y","z","braceleft","bar","braceright","asciitilde",None,
+        None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,
+        None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,
+        None,"exclamdown","cent","sterling","fraction","yen","florin","section","currency","quotesingle","quotedblleft","guillemotleft","guilsinglleft","guilsinglright","fi","fl",
+        None,"endash","dagger","daggerdbl","periodcentered",None,"paragraph","bullet","quotesinglbase","quotedblbase","quotedblright","guillemotright","ellipsis","perthousand",None,"questiondown",
+        None,"grave","acute","circumflex","tilde","macron","breve","dotaccent","dieresis",None,"ring","cedilla",None,"hungarumlaut","ogonek","caron",
+        "emdash",None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,
+        None,"AE",None,"ordfeminine",None,None,None,None,"Lslash","Oslash","OE","ordmasculine",None,None,None,None,
+        None,"ae",None,None,None,"dotlessi",None,None,"lslash","oslash","oe","germandbls",None,None,None,None
+    )
 
     encodingVectors['/PDFDocEncoding']=(None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,
         None,None,None,None,None,"breve","caron","circumflex",

@@ -85,15 +85,35 @@ class MAT(list):
         '''A partial order, self < m, for matrices that describe text boxes,
         in which case the partial order is interpreted as text precedence order.'''
 
-        order1, order2 = False, False
+
+        # Note: these cannot be simplified by factoring matrices bc of the translational parts
+        orig = VEC([0,0])
+        up_half = VEC([0,0.5])
+        up = VEC([0,1])
+        right_half = VEC([0.5,0])
+        right = VEC([1,0])
+
+        m_below_self = (self * up - self * orig) * (m * up_half - self * orig) < 0
+        self_below_m = (m * up - m * orig) * (self * up_half - m * orig) < 0
+
+        m_to_the_right_of_self = (self * up - self * orig) * (m * up_half - self * up) < 0 \
+                                    and (self * right - self * orig) * (m * up_half - self * right_half) > 0
+
+        self_to_the_right_of_m = (m * up - m * orig) * (self * up_half - m * up) < 0 \
+                                    and (m * right - m * orig) * (self * up_half - m * right_half) > 0
+
+        order1 = m_to_the_right_of_self or m_below_self
+        order2 = self_to_the_right_of_m or self_below_m
 
         # The coords of the center of the left edge of the m-text box as seen in the self-box's ref. frame
-        x,y = self.inv() * m * VEC([0,0.5])
-        if (y < 1 and x > 0.5) or y < 0: order1 = True
+        # order1, order2 = False, False
+
+        # x,y = self.inv() * m * VEC([0,0.5])
+        # if (y < 1 and x > 0.5) or y < 0: order1 = True
 
         # # The coords of the center of the left edge of the self-text box as seen in the m-box's ref. frame
-        x,y = m.inv() * self * VEC([0,0.5])
-        if (y < 1 and x > 0.5) or y < 0: order2 = True
+        # x,y = m.inv() * self * VEC([0,0.5])
+        # if (y < 1 and x > 0.5) or y < 0: order2 = True
 
         # The pair is ordered if both members of the pair think it's ordered
         return order1 and not order2

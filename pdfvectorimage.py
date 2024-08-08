@@ -5,8 +5,8 @@ import potrace
 
 from pdfrw import PdfDict, IndirectPdfDict, PdfName, PdfObject
 
-from pdfrwx.common import err
-from pdfrwx.pdfimage import PdfImage
+from .common import err
+from .pdfimage import PdfImage
 
 # ========================================================================== class PdfVectorImage
 

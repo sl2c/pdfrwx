@@ -4,7 +4,7 @@ import struct, zlib, base64
 
 from pdfrw import PdfName, IndirectPdfDict, PdfDict
 
-from pdfrwx.common import err, warn, msg
+from .common import err, warn, msg
 
 # =========================================================================== class PdfCore14Fonts
 
@@ -75,9 +75,9 @@ class PdfFontCore14:
         if standard_fontname == None: return None
         return '/ZapfDingbatsEncoding' if standard_fontname == '/ZapfDingbats' \
             else '/SymbolEncoding' if standard_fontname == '/Symbol' \
-            else '/WinAnsiEncoding'
+            else '/StandardEncoding'
 
-    def make_name2width(fontname:str):
+    def make_name2width(fontname:PdfName):
         '''
         '''
         standard_fontname = PdfFontCore14.standard_fontname(fontname)

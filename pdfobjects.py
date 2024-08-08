@@ -2,7 +2,7 @@
 
 from pdfrw import PdfObject, PdfName, PdfDict, PdfArray
 
-# ============================================================================= PdfGenerator
+# ============================================================================= PdfObjects [generator]
 
 def PdfObjects(object, name:str = '', cache:set = None, debug = False):
     '''

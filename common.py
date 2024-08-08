@@ -3,7 +3,7 @@
 import inspect,sys
 
 from pdfrw import PdfArray, PdfDict, IndirectPdfDict, PdfObject, PdfName
-from pdfrwx.pdfgeometry import BOX
+from .pdfgeometry import BOX
 
 # ========================================================= MESSAGES
 
@@ -14,7 +14,7 @@ def err(msg):
     '''Prints an error message in the form: 'Error in class.func(), line: msg',
     where class.func() are the class and the function that called err().
     Exits by sys.exit(1) afterwords'''
-    stack = inspect.stack()
+    stack = inspect.stack()    
     the_class = stack[1][0].f_locals["self"].__class__.__name__ if "self" in stack[1][0].f_locals else 'global'
     the_func = stack[1][0].f_code.co_name
     # the_func = inspect.getouterframes(inspect.currentframe(), 2)[1][3]
@@ -25,9 +25,15 @@ def err(msg):
 def msg(msg):
     '''Prints a warning message in the form: 'func(): warning: msg', where func() is the function that called warn().'''
     stack = inspect.stack()
-    the_class = stack[1][0].f_locals["self"].__class__.__name__ if "self" in stack[1][0].f_locals else 'global'
+    className = stack[1][0].f_locals["self"].__class__.__name__ if "self" in stack[1][0].f_locals \
+                    else stack[1][0].f_locals["cls"].__class__.__name__ if "cls" in stack[1][0].f_locals \
+                    else 'global'
     callerName = inspect.getouterframes(inspect.currentframe(), 2)[1][3]
-    eprint(f'{the_class}.{callerName}(): {msg}')
+
+    # Need Python 3.11 for this to work
+    # qualName = inspect.currentframe().f_back.f_back.f_code.co_qualname
+    # eprint(f'{qualName}(): {msg}')
+    eprint(f'{className}.{callerName}(): {msg}')
 
 def warn(msg):
     '''Prints a warning message in the form: 'func(): warning: msg', where func() is the function that called warn().'''

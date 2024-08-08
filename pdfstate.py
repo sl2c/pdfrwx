@@ -4,10 +4,10 @@ import re
 
 from pdfrw import PdfDict, PdfName
 
-from pdfrwx.common import err, warn, msg
-from pdfrwx.pdffont import PdfFont, PdfTextString
-from pdfrwx.pdffontglyphmap import PdfFontGlyphMap
-from pdfrwx.pdfgeometry import VEC, MAT, BOX
+from .common import err, warn, msg
+from .pdffont import PdfFont, PdfTextString
+from .pdffontglyphmap import PdfFontGlyphMap
+from .pdfgeometry import VEC, MAT, BOX
 
 from math import sqrt
 
@@ -108,7 +108,7 @@ class PdfState:
             if fontId in self.__fontCache:
                 cs.font = self.__fontCache[fontId]
             else:
-                cs.font = PdfFont(cs.font, self.glyphMap)
+                cs.font = PdfFont(font = cs.font, glyphMap = self.glyphMap)
                 self.__fontCache[fontId] = cs.font
  
         # Text commands
@@ -172,9 +172,11 @@ class PdfState:
             # Calculate left coords of the tight text rectangle
             fs = cs.fontSize
             fontBox = (MAT([fs,0,0,fs,0,0]) * cs.font.fontMatrix) * cs.font.bbox
-            textHeight = fontBox[3]
+            textHeight = fontBox[3] - fontBox[1]
+            baseLine = fontBox[1]
+            if textHeight == 0: raise ValueError(f'textHeight == 0, font.bbox = {cs.font.bbox}, font.fontMatrix = {cs.font.fontMatrix}')
             if textWidthTight == 0: textWidthTight = 0.001
-            textMatrix = cs.CTM * cs.Tm * MAT([textWidthTight, 0, 0, textHeight, shiftTight, 0])
+            textMatrix = cs.CTM * cs.Tm * MAT([textWidthTight, 0, 0, textHeight, shiftTight, baseLine])
             textMatrix = MAT([round(x*1000)/1000 for x in textMatrix])
  
             # Update Tm, but not Tlm

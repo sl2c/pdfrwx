@@ -4,8 +4,8 @@ import re
 
 from pdfrw import IndirectPdfDict, py23_diffs
 
-from pdfrwx.common import err, warn, msg
-from pdfrwx.pdffilter import PdfFilter
+from .common import err, warn, msg
+from .pdffilter import PdfFilter
 
 
 
@@ -230,6 +230,7 @@ class PdfFontCMap:
         cc2u = self.cc2unicode
         s = "# dots '.' mean '.notdef'; to encode the dot per se, use e.g.: <002E><002E><002E>\n"
         skip = False
+        firstLine = True
         keys = sorted(cc2u.keys())
         if len(keys) == 0: return s
 
@@ -246,8 +247,9 @@ class PdfFontCMap:
                 if u in special or len(u) != 1: line += '.'; triples[cc] = u; continue
                 line += u
             if line == '.'*16: skip = True; continue
-            if skip or row % 16 == 0: s += f'<{row*16:04X}>\n'
+            if skip or row % 16 == 0 or firstLine: s += f'<{row*16:04X}>\n'
             s += line + '\n'
+            firstLine = False
             skip = False
  
         dotLines = ''.join(f'<{ord(cc):04X}><{ord(cc):04X}><002E>\n' for cc in cc2u if cc2u[cc] == '.')
@@ -300,7 +302,7 @@ class PdfFontCMap:
     def compose(self, composer:'PdfFontCMap', impose=False):
         '''Returns a tuple (CMap, modified) where CMap is a composite CMap made by applying
         the composer CMap to the values of self.cmap whenever possible.
-        If impose == True, composer mappings for cids that are not in self.cmap are added to the result.
+        If impose == True, composer mappings for CIDs that are not in self.cmap are added to the result.
         The value of modified tells if the returned CMap is actually different from self
         '''
         result = PdfFontCMap(); result.cc2unicode = self.cc2unicode.copy()

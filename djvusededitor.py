@@ -10,20 +10,19 @@ from typing import Callable
 # Try using: github.com/sarnold/pdfrw as it contains many fixes compared to pmaupin's version
 from pdfrw import PdfReader, PdfWriter, PdfArray, PdfDict, IndirectPdfDict, PdfName
 
-from pdfrwx.common import err,msg,warn,eprint, encapsulate
-from pdfrwx.pdffont import PdfFont, PdfFontUtils, PdfTextString
-from pdfrwx.pdffontencoding import PdfFontEncoding
-from pdfrwx.pdfstreamparser import PdfStream
-from pdfrwx.pdfstreameditor import PdfStreamEditor
-from pdfrwx.djvusedparser import DjVuSedLexer, DjVuSedParser
-from pdfrwx.pdfstate import PdfState
-from pdfrwx.pdffontglyphmap import PdfFontGlyphMap
-from pdfrwx.pdffilter import PdfFilter
+from .common import err,msg,warn,eprint, encapsulate
+from .pdffont import PdfFont, PdfTextString, PdfFontUtils
+from .pdffontencoding import PdfFontEncoding
+from .pdfstreamparser import PdfStream
+from .pdfstreameditor import PdfStreamEditor
+from .djvusedparser import DjVuSedLexer, DjVuSedParser
+from .pdfstate import PdfState
+from .pdffontglyphmap import PdfFontGlyphMap
+from .pdffilter import PdfFilter
 
 import xml.etree.ElementTree as ET # for parsing hOCR files
 
 
-from pdfrwx.common import err,warn,eprint
 
 # ========================================================================== class DjVuSedEditor
 
@@ -74,12 +73,13 @@ class DjVuSedEditor:
                 textNormalized = text
                 textNormalized = self.unicodeToDjvuSedString(text) # This extends djvused format to allow Unicode strings
                 textUnicode = self.djvuSedStringToUnicode(textNormalized)
+
                 if len(textUnicode) == 0: continue
                 pdfString = font.encodePdfTextString(textUnicode)
                 stringWidth = font.width(textUnicode)
                 if stringWidth == 0: continue
 
-                scale_x = int(round(font.scaleFactor*(float(xmax)-float(xmin))/stringWidth))
+                scale_x = int(round(float(xmax)-float(xmin))/stringWidth)
 
                 # if fontsize != None and fontsize_new > fontsize and len(textUnicode)<3:
                 #     fontsize_new = fontsize
@@ -109,6 +109,7 @@ class DjVuSedEditor:
         # One font, many pages
         utils = PdfFontUtils()
         font = utils.loadFont([defaultUnicodeFont], ['.',defaultFontDir])
+        if not font: raise ValueError(f'cannot proceed with inserting an OCR layer: no font loaded')
         xobjCache = {}
 
         # Run over pages in the djvusedTree
@@ -123,6 +124,10 @@ class DjVuSedEditor:
                 err(f'pageNo ({pageNo}) is outside pdf page range (1-{len(pdf.pages)})')
             eprint(f'inserting OCR in page {pageNo}')
             pdfPage = pdf.pages[pageNo-1]
+            
+            # Fix missing Contents
+            if pdfPage.Contents == None:
+                pdfPage.Contents = IndirectPdfDict(stream = '')
 
             # Remove old OCR
             resources = pdfPage.inheritable.Resources
@@ -147,7 +152,7 @@ class DjVuSedEditor:
                 # Get the scale factors
                 xmin,ymin,xmax,ymax = [float(a) for a in djvusedPageTree[1:5]]
                 width,height = xmax - xmin, ymax - ymin
-                bbox = pdfPage.inheritable.CropBox if pdfPage.inheritable.CropBox != None else pdfPage.inheritable.MediaBox
+                bbox = pdfPage.inheritable.CropBox or pdfPage.inheritable.MediaBox
                 if bbox == None: err(f'No page bbox on page {pageNo}')
                 x1,y1,x2,y2 = [float(b) for b in bbox]
 

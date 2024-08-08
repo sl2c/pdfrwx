@@ -28,7 +28,7 @@ class DjVuSedLexer(Lexer):
     TYPE = r'page|column|region|para|line|word|char'
     INTEGER = r"\d+"
     # SYMBOL = r"[a-zA-Z_#][a-zA-Z0-9_#\-]*"
-    STRING = r'"([a-zA-Z0-9а-яА-ЯёЁ«»№ !#$%&\'()*+,\-./:;<=>?@\[\]^_`{|}~]|\\[0-9]{1,3}|\\[abtnvfr\\"])*"'
+    STRING = r'"([a-zA-Z0-9а-яА-ЯёЁ«»№ !#$%&\'()*+,\-./:;<=>?@\[\]^_`{|}~ª-힣]|\\[0-9]{1,3}|\\[abtnvfr\\"])*"'
     LPAREN = r'\('
     RPAREN = r'\)'
 

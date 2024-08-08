@@ -10,16 +10,16 @@ from typing import Callable
 # Try using: github.com/sarnold/pdfrw as it contains many fixes compared to pmaupin's version
 from pdfrw import PdfReader, PdfWriter, PdfArray, PdfDict, IndirectPdfDict, PdfName
 
-from pdfrwx.common import err,msg,warn,eprint, encapsulate, get_box
-from pdfrwx.pdffont import PdfFont, PdfFontUtils, PdfTextString
-from pdfrwx.pdffontencoding import PdfFontEncoding
-from pdfrwx.pdfstreamparser import PdfStream
-from pdfrwx.djvusedparser import DjVuSedLexer, DjVuSedParser
-from pdfrwx.pdfstate import PdfState
-from pdfrwx.pdffontglyphmap import PdfFontGlyphMap
-from pdfrwx.pdffilter import PdfFilter
-from pdfrwx.pdfimage import PdfImage
-from pdfrwx.pdfgeometry import VEC, MAT, BOX
+from .common import err,msg,warn,eprint, encapsulate, get_box
+from .pdffont import PdfFont, PdfTextString
+from .pdffontencoding import PdfFontEncoding
+from .pdfstreamparser import PdfStream
+from .djvusedparser import DjVuSedLexer, DjVuSedParser
+from .pdfstate import PdfState
+from .pdffontglyphmap import PdfFontGlyphMap
+from .pdffilter import PdfFilter
+from .pdfimage import PdfImage
+from .pdfgeometry import VEC, MAT, BOX
 
 import xml.etree.ElementTree as ET # for parsing hOCR files
 
@@ -30,7 +30,6 @@ import numpy as np
 
 import hashlib
 
-from pdfrwx.common import err,warn,eprint
 
 # ========================================================================== class PdfStreamEditor
 
@@ -332,6 +331,7 @@ class PdfStreamEditor:
                 if xobj.Subtype == PdfName.Image and render:
                     image = PdfImage.decode(xobj)
                     w,h = image.size
+                    assert w != 0 and h != 0
                     chunks.append((image, cs.CTM * MAT([w,0,0,h,0,0])))
 
             # Process the nested BT/ET block a recursive call on the body

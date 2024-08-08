@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 
+from pdfrw import PdfDict
 
-from pdfrwx.common import err, warn, msg
-from pdfrwx.pdffont import PdfFont, PdfTextString
-from pdfrwx.pdfstate import PdfState
+from .common import err, warn, msg
+from .pdffont import PdfFont, PdfTextString
+from .pdfstate import PdfState
+from .pdfstreameditor import PdfStreamEditor
+from .pdffontglyphmap import PdfFontGlyphMap
 
 class PdfRender(PdfStreamEditor):
 

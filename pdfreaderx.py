@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 
-from pdfrwx.common import err, warn, msg
 from pdfrw import PdfReader, PdfDict
+
+from .common import err, warn, msg
 
 # ========================================================================== class PdfReaderX
 

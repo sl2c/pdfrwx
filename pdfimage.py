@@ -6,26 +6,40 @@
 # https://github.com/homm/
 # https://twitter.com/wouldntfix
 
+from pdfrw import PdfReader, PdfWriter, PdfObject, PdfName, PdfArray, PdfDict, IndirectPdfDict
+from pdfrw import py23_diffs # Ugly, but necessary: https://github.com/pmaupin/pdfrw/issues/161
+
+from pdfrwx.common import err, msg, warn, eprint, get_key, get_any_key
+from pdfrwx.pdffilter import PdfFilter
+from pdfrwx.pdfobjects import PdfObjects
+from pdfrwx.pdffunctionparser import PdfFunction
+
+from simage import SImage
+
+from attrdict.attrdict import AttrDict
+
+from typing import Union
+
 import argparse, struct, zlib, base64, sys, re, os, subprocess, tempfile
 
 from io import BytesIO
 import numpy as np
+import shutil
 
 from PIL import Image, TiffImagePlugin, ImageChops, ImageCms
 Image.MAX_IMAGE_PIXELS = None
 
 from glymur import Jp2k
 
-
-from pdfrw import PdfReader, PdfWriter, PdfObject, PdfName, PdfArray, PdfDict, IndirectPdfDict, py23_diffs
-from pdfrwx.common import err, msg, warn, eprint, get_key, get_any_key
-from pdfrwx.pdffilter import PdfFilter
-from pdfrwx.pdfobjects import PdfObjects
-from pdfrwx.pdffunctionparser import PdfFunction
-
 from pprint import pprint
 
 CMYK_DEFAULT_ICC_PROFILE = open(os.path.join(os.path.dirname(__file__),'color_profiles/USWebCoatedSWOP.icc'), 'rb').read()
+
+# ============================================================== timeit
+
+from time import time
+tStart = time()
+def timeit(s): print(f'TIME: {s}: {time()-tStart:0.3f} sec')
 
 # ============================================================== class OS
 
@@ -43,7 +57,11 @@ class OS:
 
 # ========================================================================== class PdfColorSpace
 
-class PdfColorSpace(PdfArray):
+# Typedef
+    
+CS_TYPE = Union[PdfName, PdfArray]
+
+class PdfColorSpace:
 
     # A mapping from color space name to components per pixel; None means that cpp varies
     spaces = {
@@ -55,42 +73,55 @@ class PdfColorSpace(PdfArray):
     # A mapping from components per pixel to PIL image modes
     modes = {1:'L', 3:'RGB', 4:'CMYK'}
 
-    def get_name(cs):
+    @staticmethod
+    def toStr(cs:CS_TYPE):
+        return cs if isinstance(cs, str) \
+            else [type(x) if type(x) in [PdfArray, PdfDict, bytes] else x for x in cs]
+
+    @staticmethod
+    def get_name(cs:CS_TYPE):
         '''
         Returns the name of the color space (on of the PdfColorSpace.spaces.keys())
         '''
         name = cs if not isinstance(cs,PdfArray) \
                     else '/NChannel' if cs[0] == '/DeviceN' and len(cs) == 5 and cs[4].Subtype == '/NChannel' \
                     else cs[0]
-        if name not in PdfColorSpace.spaces:
+        if name != None and name not in PdfColorSpace.spaces:
             raise ValueError(f'bad color space: {cs}')
         return name
 
-    def get_cpp(cs):
+    @staticmethod
+    def get_cpp(cs:CS_TYPE):
         '''
         Return the number of components per pixel for a give color space.
         '''
         name = PdfColorSpace.get_name(cs)
         return int(cs[1].N) if name == '/ICCBased' else \
                 len(cs[1]) if name in ['/DeviceN', '/NChannel'] else \
-                PdfColorSpace.spaces.get(name, None)
+                PdfColorSpace.spaces.get(name)
 
-    def get_mode(cs):
+    @staticmethod
+    def get_mode(cs:CS_TYPE, bpc:int):
         '''
         '''
-        return PdfColorSpace.modes.get(PdfColorSpace.get_cpp(cs), None)
+        return '1' if bpc == 1 else PdfColorSpace.modes.get(PdfColorSpace.get_cpp(cs))
 
-    def get_icc_profile(cs):
+    @staticmethod
+    def get_icc_profile(cs:CS_TYPE):
         '''
         For calibrated /CalGray, /CalRGB, /Lab and /ICCBased color spaces, returns
-        the ICC color profile as a bytes object. For all other color spaces returns None.
+        the ICC color profile as a bytes object. For the /Indexed color space,
+        returns the ICC color profile of the 'base' color space, if present, or None.
+        For all other color spaces returns None.
         '''
         name = PdfColorSpace.get_name(cs)
-        if name == '/ICCBased': return py23_diffs.convert_store(PdfFilter.uncompress(cs[1]).stream)
+        if name == '/Indexed': return PdfColorSpace.get_icc_profile(cs[1])
+        elif name == '/ICCBased': return py23_diffs.convert_store(PdfFilter.uncompress(cs[1]).stream)
         elif name in ['/CalGray','/CalRGB', '/Lab']: return PdfColorSpace.create_profile(cs)
         else: None
 
-    def get_palette(cs):
+    @staticmethod
+    def get_palette(cs:CS_TYPE):
         '''
         Return a tuple (paletteColorSpace, paletteArray), where paletteArray is a numpy array of shape (-1, cpp),
         cpp is the number of color components in the paletteColorSpace.
@@ -112,7 +143,8 @@ class PdfColorSpace(PdfArray):
 
         return base, np.frombuffer(pal, 'uint8').reshape(-1, palette_cpp)
 
-    def create_profile(cs):
+    @staticmethod
+    def create_profile(cs:CS_TYPE):
         '''
         Creates an ICC profile for a given color space, when it's one of ['/CalGray', ..], ['/CalRGB', ..], ['/Lab', ..]
         '''
@@ -160,54 +192,125 @@ class PdfColorSpace(PdfArray):
 
         return icc_profile
     
-    def apply_colorspace(colorSpace, array:np.ndarray):
+    @staticmethod
+    def reduce(cs:CS_TYPE, array:np.ndarray, Decode:list[float] = None, bpc:int = 8, mask:PdfDict = None):
         '''
-        Returns the tuple (newColorSpace, icc_profile, array).
-
-        * for device-based color spaces (/DeviceGray, /DeviceRGB, /DeviceCMYK),
-        the originals are returned as nothing needs to be done;
-        * for /Indexed color spaces the originals are returned; such color spaces should be processed
-        separately.
-        * for calibrated color spaces (/CalGray, /CalRGB, /Lab, /ICCBased), a copy of the image with
-        an ICC profile inserted is returned;
-        * for /Separation, /DeviceN and /NChannel color spaces, the image is remapped to the
-        alternate color space using the transform function, and the result is returned;
-
-        In last case, the new (target/raw) color space is recursively applied to the result.
+        Reduces the image array:
+        
+        * decodes it using the specified Decode array if it's not None or otherwise
+        the default decode array, which is determined based on the specified colorspace and bpc;
+        * un-multiplies alpha if mask.Matte is not None;
+        * if the colorspace is one of `/Separation`, `/DeviceN`, `/NChannel`, reduces the colorspace
+        by remapping the image array to the corresponding alternate colorspace;
+        * encodes the image array using the default Decode array based on the ending colorspace
+        (the original or the alternate one, depending on whether the colorspace has been reduced
+        in the previous step) and the value of bpc == 8.
+        
+        Returns the tuple (newColorSpace, array).
         '''
-        cs = colorSpace
+        SPECIAL = ['/Separation', '/DeviceN', '/NChannel']
+
         name = PdfColorSpace.get_name(cs)
+        h,w = array.shape[:2]
+        assert array.ndim in [2,3]
+
+        if bpc == 1:
+            warn(f'cannot apply colorspace {name} to a bitonal image; skipping')
+            return cs, array
+
         msg(f'applying color space: {name}')
+        Matte = mask.Matte if mask else None
+        default_decode = PdfDecodeArray.get_default(cs, bpc)
+        applyDecode = bpc != 8 or Matte or Decode and ((name in SPECIAL) or (Decode != default_decode))
 
-        if name in ['/CalGray', '/CalRGB', '/Lab', '/ICCBased']:
-            icc_profile = PdfColorSpace.get_icc_profile(cs)
-            return colorSpace, icc_profile, array
+        # Decode
+        if applyDecode:
+            Decode = Decode or default_decode
+            array = PdfDecodeArray.decode(array, Decode, bpc)
 
-        if name in ['/Separation', '/DeviceN', '/NChannel']:
+        # Matte
+        if Matte:
+
+            # Get matte array
+            matte_array = np.array([float(x) for x in Matte])[np.newaxis, np.newaxis, :]
+
+            # Render alpha
+            alpha = PdfImage(obj = mask)
+            alpha.render()
+
+            # Resize alpha
+            if alpha.w() != w or alpha.h() != h:
+                msg(f'resizing alpha: {alpha.w()} x {alpha.h()} --> {w} x {h}')
+                alpha.resize(w,h)
+
+            # Get decoded alpha array
+            alpha_array, _ = alpha.get_array()
+            alpha_decode_default = PdfDecodeArray.get_default(alpha.get_cs(), alpha.bpc)
+            alpha_array = PdfDecodeArray.decode(alpha.get_array(), alpha_decode_default, alpha.bpc)
+            alpha_array = alpha_array[:,:,np.newaxis]
+
+            # Un-multiply alpha
+            msg(f'Unmultiplying alpha; Matte = {Matte}')
+            array =  matte_array + (array - matte_array) / alpha_array
+
+        # These color spaces are function-based, so apply this function
+        if name in SPECIAL:
+
             altColorSpace, colorTransformFunction = cs[2], cs[3]
+            array = array if array.ndim == 3 else np.dstack([array])
             stack = np.moveaxis(array,-1,0)
             stack = PdfFunction(colorTransformFunction).process(stack)
             array = np.moveaxis(stack,0,-1)
-            return PdfColorSpace.apply_colorspace(altColorSpace, array)
+            cs = altColorSpace
 
-        return colorSpace, None, array
+        # Encode with bpc == 8
+        if applyDecode:
+            array = PdfDecodeArray.encode(array, PdfDecodeArray.get_default(cs, 8))
+
+        return cs, array
 
 
-    def apply_default_page_colorspace_icc_profile(page:PdfDict, image:Image.Image):
+    @staticmethod
+    def apply_default_page_colorspace_icc_profile(page:PdfDict, cs:CS_TYPE):
         '''
-        If image.inf['icc_profile'] == None, apply the ICC profile from the page's default color space,
-        if present, to the image (in-place).
+        If image.inf['icc_profile'] == None, apply the ICC profile from the page's default color space
+        (an entry in page.Resources.Colorspace, if present) to the image (in-place).
         '''
-        if page == None or image.info['icc_profile'] == None: return
+        if page == None or image.info.get('icc_profile'): return
         try:
-            default_cs_names = {'L':'/DefaultGray', 'RGB':'/DefaultRGB', 'CMYK':'/DefaultCMYK'}
-            default_cs_name = default_cs_names[image.mode]
-            default_cs = page.Resources.ColorSpace[default_cs_name]
-            image.info['icc_profile'] = PdfColorSpace.get_icc_profile(default_cs)
-            msg(f'applied default page colorspace ICC profile: {PdfColorSpace.get_name(default_cs)}')
+            default_cs = page.Resources.ColorSpace[cs]
         except:
             pass
 
+    # @staticmethod
+    # def make_indexed_colorspace(palette:bytes, baseColorspace):
+    #     '''
+    #     Returns an /Indexed colorspace based on the image's palette and baseColorspace, or
+    #     None if image has no palette.
+    #     '''
+    #     # palette = image.getpalette()
+    #     # if palette == None: return None
+    #     # palette = b''.join(v.to_bytes(1,'big') for v in image.getpalette())
+
+    #     cpp = PdfColorSpace.get_cpp(baseColorspace)
+    #     assert len(palette) % cpp == 0
+        
+    #     palette_xobj = IndirectPdfDict(Filter = PdfName.FlateDecode,
+    #                                    stream = zlib.compress(palette).decode('Latin-1'))
+    #     return PdfArray([PdfName.Indexed, baseColorspace, len(palette) // cpp, palette_xobj])
+
+    @staticmethod
+    def make_icc_based_colorspace(icc_profile:bytes, N:int):
+        '''
+        Returns an /ICCBased colorspace made from the icc_profile with N being the number of color components.
+        '''
+        icc_xobj = IndirectPdfDict(
+            N = N,
+            Filter = PdfName.FlateDecode,
+            stream = zlib.compress(icc_profile).decode('Latin-1')
+        )
+        return PdfArray([PdfName.ICCBased, icc_xobj])
+    
 # ========================================================================== class PdfDecodeArray
 
 class PdfDecodeArray:
@@ -216,20 +319,21 @@ class PdfDecodeArray:
     The class facilitates processing of image.Decode arrays.
     '''
 
-    def get_actual(Decode:PdfArray, colorSpace, bpc):
+    @staticmethod
+    def get_actual(Decode:PdfArray, cs:CS_TYPE, bpc:int):
         '''
         Returns actual Decode array as list[float] if self.image.Decode != None, or self.get_default(colorSpace) otherwise.
         ''' 
         FLOAT = lambda array: [float(a) for a in array]
-        return FLOAT(Decode) if Decode != None else PdfDecodeArray.get_default(colorSpace, bpc)
+        return FLOAT(Decode) if Decode != None else PdfDecodeArray.get_default(cs, bpc)
 
-    def get_default(colorSpace, bpc:int):
+    @staticmethod
+    def get_default(cs:CS_TYPE, bpc:int):
         '''
         Returns the default Decode array for a give color space; see Adobe PDF Ref. 1.7, table 4.40 (p.345)
         ''' 
         FLOAT = lambda array: [float(a) for a in array]
 
-        cs = colorSpace
         name = PdfColorSpace.get_name(cs)
         cpp = PdfColorSpace.get_cpp(cs)
 
@@ -246,619 +350,730 @@ class PdfDecodeArray:
 
         return d
 
-    def decode(array:np.ndarray, Decode:list, bpc:int):
+    @staticmethod
+    def decode(array:np.ndarray, Decode:list[float], bpc:int):
         '''
         Translates a numpy array from encoded ("stream space": int, 1..2**bpc -1)
         to decoded ("image space", float: mostly 0.0..1.0) representation.
+        The array should be (D+1) dimensional, where D is the # of dimensions of the image
+        and the last dimension is for the color index.
         '''
+        assert Decode
         msg(f'applying Decode: {Decode}')
         INTERPOLATE = lambda x, xmin, xmax, ymin, ymax: ymin + ((x - xmin) * (ymax - ymin)) / (xmax - xmin)
-
+        iMax = float((1<<bpc) - 1)
+        if array.ndim == 2: array = np.dstack([array])
         N = array.shape[-1] # number of colors
         assert len(Decode) == 2*N
-        iMax = float((1<<bpc) - 1)
         array = np.clip(array, 0, iMax).astype(float)
         for i in range(N):
             array[...,i] = INTERPOLATE(array[...,i], 0.0, iMax, Decode[2*i], Decode[2*i + 1])
-        return array
+        return array if N > 1 else array[...,0]
 
-    def encode(array:np.ndarray, Decode:list):
+    @staticmethod
+    def encode(array:np.ndarray, Decode:list[float]):
         '''
         Translates a numpy array from decoded ("image space", float: mostly 0.0..1.0)
         to encoded ("stream space", uint8: 0..255) representation.
         '''
         msg(f'applying Encode: {Decode}')
         INTERPOLATE = lambda x, xmin, xmax, ymin, ymax: ymin + ((x - xmin) * (ymax - ymin)) / (xmax - xmin)
-
+        if array.ndim == 2: array = np.dstack([array])
         N = array.shape[-1] # number of colors
         assert len(Decode) == 2*N
         for i in range(N):
             array[...,i] = INTERPOLATE(array[...,i].astype(float), Decode[2*i], Decode[2*i + 1], 0, 255)
         array = np.clip(np.round(array), 0, 255).astype(np.uint8)
-        return array
+        return array if N > 1 else array[...,0]
 
 
-# ========================================================================== class PdfImage
+# ========================================================================== class PdfDecodedImage
 
-class PdfImage:
+class PdfImage(AttrDict):
 
-    # -------------------------------------------------------------------- encode()
+    # To do:
+    # 1) Lab color
+    # 2) color reductions
 
-    def encode(image:Image.Image, \
-               compressionFormat:str = None, \
-               compressedQuality:float = None, \
-               compressionRatio:float = None):
+    formats = ['array', 'pil', 'tiff', 'jbig2', 'jpeg', 'jp2', 'png']
+
+    def __init__(self,
+                 obj:IndirectPdfDict = None,
+                 pil:Image.Image = None,
+                 array:np.ndarray = None,
+                 jp2:bytes = None):
         '''
-        Converts a PIL image to a PDF image XObject.
-        Returns a tuple (xobj, dpi), where xobj is the created PDF image XObject
-        and dpi is a tuple (xdpi, ydpi) of the image's resolution. Processing depends on image.mode/format:
+        Creates a PdfImage.
+        '''
+        if sum(1 for x in [obj, pil, array,jp2] if x is not None) != 1:
+            raise ValueError(f'exactly one of the [pil, array, obj] arguments should be given to constructor')
         
-        * JPEG (image.format is 'JPEG') images are stored "as-is" using the /DCTDecode filter (no transcoding is done)
+        self.pil = pil
+        self.array = array
+        self.jp2 = jp2
+        self.dpi = None
 
-        * Bitonal (image.mode is '1') images are compressed using the /CCITTFaxDecode filter with Group4 encoding.
+        self.Decode = None
+        self.Mask = None
 
-        * All other images are compressed using the /FlateDecode filter.
+        self.isRendered = False
 
-        For images with transparency, the alpha-channel is stored in xobj.SMask.
-        For palette-based/indexed (image.mode == 'P') images, the palette is used to create an /Indexed color space.
-        The ICC color profile (image.info['icc_profile']), if present, is used to set up the corresponding
-        /ICCBased color space.
+        if obj:
 
-        If compressionFormat is 'JPEG' or 'JPEG2000', the lossy compression into that format with
-        the specified quality is attempted, and if this reduces the size of the image
-        compared to the original lossless compression, the lossy-compressed version is encoded.
-        '''
+            assert obj.Subtype in ['/Image', PdfName.Image]
+            if obj.stream == None: raise ValueError(f'image has no stream: {obj}')
 
-        # A lambda for printing out size changes in the form old_size --> new size (+-change%)
-        print_size_change = lambda size_old, size_new: \
-            f'Size: {size_old} --> {size_new} ({((size_new - size_old)*100)//size_old:+d}%)'
+            obj = PdfFilter.uncompress(obj)
 
-        w,h = image.size
-        DecodeParms = None
-        Decode = None
-        # ImageMask = None
+            self.Decode = obj.Decode
+            self.ColorSpace = PdfImage.xobject_get_cs(obj)
+            self.bpc = PdfImage.xobject_get_bpc(obj)
 
-        # Save the ICC profile so that it's not lost when splitting off the alpha-channel
-        icc_profile = image.info.get('icc_profile')
+            def toBytes(s:str): return s.encode('Latin-1')
+            stream = toBytes(obj.stream)
 
-        # Separate alpha channel
-        alpha = None
-        if image.mode == 'LA':
-            image, alpha = image.split()
-        if image.mode == 'RGBA':
-            r, g, b, alpha = image.split()
-            image = Image.merge('RGB',(r,g,b))
+            if obj.Filter == None:
 
-        # Encode alpha
-        if alpha != None:
-            image.info['icc_profile'] = icc_profile
-            # msg('Image encoding started')
-            xobj, dpi = PdfImage.encode(image, compressionFormat, compressedQuality, compressionRatio)
-            # msg('Image encoding ended')
-            if 'icc_profile' in alpha.info: del alpha.info['icc_profile'] # alpha should not have icc_profile
-            # msg('Mask encoding started')
-            xobj_alpha, _ = PdfImage.encode(alpha, compressionFormat, compressedQuality, compressionRatio)
-            # msg('Mask encoding ended')
-            xobj.SMask = xobj_alpha
-            return xobj, dpi
+                width, height = int(obj.Width), int(obj.Height)
+                cpp = self.get_cpp()
 
-        modes = {
-            '1':(PdfName.DeviceGray,1,1),
-            'L':(PdfName.DeviceGray,1,8),
-            'RGB':(PdfName.DeviceRGB,3,8),
-            'CMYK':(PdfName.DeviceCMYK,4,8)
-        }
+                array = PdfFilter.unpack_pixels(stream, width, cpp, self.bpc, truncate = True)
+                if array.shape[0] > height:
+                    warn(f'more rows in stream than expected: {array.shape[0]} vs {height}; truncating')
+                    array = array[:height]
+                assert array.shape[0] == height
+                array = SImage.normalize(array)
+                if self.bpc == 1: array = array.astype(bool)
+                self.set_array(array)
 
-        # Make sure not to use mode anywhere outside this block
-        mode = image.mode if image.mode != 'P' else image.palette.mode
-        if mode not in modes: raise ValueError(f"unsupported image or palette mode: {mode} ")
-        cs, cpp, bpc = modes[mode]
-    
-        # Set up /ICCBased color space
-        if icc_profile != None:
-            icc_xobj = IndirectPdfDict(
-                N = cpp,
-                Filter = PdfName.FlateDecode,
-                stream = py23_diffs.convert_load(zlib.compress(icc_profile))
-            )
-            cs = PdfArray([PdfName.ICCBased, icc_xobj])
+            elif obj.Filter == '/CCITTFaxDecode':
 
-        # Set up /Indexed color space
-        if image.mode == 'P':
-            palette = b''.join(v.to_bytes(1,'big') for v in image.getpalette())
-            palette_xobj = IndirectPdfDict(
-                Filter = PdfName.FlateDecode,
-                stream = py23_diffs.convert_load(zlib.compress(palette))
-            )
-            # Current color space becomes base for the /Indexed color space!
-            cs = PdfArray([PdfName.Indexed, cs, len(palette)//3, palette_xobj])
+                header = PdfImage._tiff_make_header(obj)
+                self.set_pil(Image.open(BytesIO(header + stream)))
 
-        # Start encoding
+            elif obj.Filter == '/JBIG2Decode':
 
-        if image.format == 'JPEG':
+                jbig2_locals = stream
+                try: jbig2_globals = toBytes(PdfFilter.uncompress(obj.DecodeParms.JBIG2Globals).stream)
+                except: jbig2_globals = None
+                self.set_pil(PdfImage._jbig2_read([jbig2_locals, jbig2_globals]))
 
-            # msg('JPEG --> /DCTDecode')
+            elif obj.Filter == '/DCTDecode': 
 
-            with BytesIO() as bs:
-                image.save(bs, format='JPEG', quality='keep')
-                stream = bs.getvalue()
-                if stream[-2:] != b'\xff\xd9': stream += b'\xff\xd9' # fix a bug found in some jpeg files
-            filter = 'DCTDecode'
+                pil = Image.open(BytesIO(stream))
 
-        elif image.format == 'JPEG2000':
+                self.set_pil(pil)
 
-            # msg('JPEG 2000 --> /JPXDecode')
-            with BytesIO() as bs:
-                image.save(bs, format='JPEG2000', quality='keep')
-                stream = bs.getvalue()
-            filter = 'JPXDecode'
+            elif obj.Filter == '/JPXDecode':
 
-        elif image.mode == '1': # TIFF
+                self.set_jp2(stream)
 
-            # msg('Bitonal --> /CCITTFaxDecode')
-            # msg(image.info)
-            stream = ImageUtils.PIL_image_to_PDF_stream_with_TIFF_codecs(image)
-            filter = 'CCITTFaxDecode'
-            # ImageMask = PdfObject('true')
-            DecodeParms = PdfDict(K = -1, Columns = w, Rows = h, BlackIs1 = PdfObject('true'))
-            # DecodeParms = PdfDict(K = -1, Columns = w, Rows = h)
-
-        else: # PNG and others
-
-            # msg('Color --> /FlateDecode')
-            # ToDo: a) use optional predictors; b) feed the PNG IDAT chunk without re-encoding
-            # Update: optimization using predictors is slow and gives only an extra 5% reduction in size
-
-
-            # The baseline
-            stream = zlib.compress(image.tobytes())
-
-            # # Encoding via optimized PNG (uses predictors?)
-            # if image.mode in ['L', 'RGB']:
-            #     stream_png = ImageUtils.PIL_image_to_PNG_IDAT_chunk(image)
-            #     if stream_png != None:
-            #         size_zlib, size_png = len(stream), len(stream_png)
-            #         if stream_png != None and size_png < size_zlib:
-            #             print(f'PNG optimization: {size_zlib} -> {size_png}')
-            #             stream = stream_png
-            #             DecodeParms = PdfDict(Predictor = 15, Columns = w, Colors = cpp)
-            #             # l = len(zlib.decompress(stream_png))
-            #             # if not l == (w * cpp + 1) * h:
-            #             #     warn(f'size mismatch: expected {w}, got {((l / h - 1)/cpp)}')
-            #         else:
-            #             print(f'PNG optimization not performed: {size_zlib} -> {size_png}')
-
-            # # The optimization with TIFF Predictor 2
-            # if image.mode != 'P':
-            #     array = PdfFilter.unpack_pixels(image.tobytes(), w, h, cpp, bpc)
-            #     array = np.hstack((array[:,0,:].reshape(h,1,cpp), np.diff(array, axis=1))) # difference
-            #     stream_predicted = PdfFilter.pack_pixels(array, w, h, cpp, bpc)
-            #     stream_predicted = zlib.compress(stream_predicted)
-            #     sizeOld, sizeNew = len(stream), len(stream_predicted)
-            #     if sizeNew < sizeOld:
-            #         stream = stream_predicted
-            #         DecodeParms = PdfDict(Predictor = 2, Columns = w, Colors = 3)
-            #         print(f'optimized with TIFF Predictor 2: {sizeOld} -> {sizeNew}')
-            #     else:
-            #         print(f'skipping TIFF Predictor 2 optimization: {sizeOld} -> {sizeNew}')
-
-
-            # stream = zlib.compress(image.tobytes())
-
-            filter = 'FlateDecode'
-
-
-        # Re-compress streams as ZIP if requested; do not recompress palette-based images
-        if compressionFormat == 'ZIP' and filter != 'FlateDecode' and image.mode != 'P':
-            with BytesIO() as bs:
-                stream_compressed = zlib.compress(image.tobytes())
-
-                size, size_compressed = len(stream), len(stream_compressed)
-                # size gains of < 10% do not justify loss of quality in re-compression
-                # if size_compressed * 10 < size * 9:
-                if True:
-                    msg(f're-compressed [{compressionFormat}]; ' + print_size_change(size, size_compressed))
-                    stream = stream_compressed
-                    filter = 'FlateDecode'
-                else:
-                    msg(f'skipped re-compression [{compressionFormat}]; ' + print_size_change(size, size_compressed))
-
-        # Re-compress streams as JPEG if requested; do not recompress palette-based images
-        if compressionFormat in ['JPEG', 'JPEG2000'] and filter in ['FlateDecode', 'DCTDecode', 'JPXDecode'] and image.mode != 'P':
-            with BytesIO() as bs:
-                if compressionFormat == 'JPEG':
-                    assert 0 < compressedQuality <= 100
-                    image.save(bs, format='JPEG', quality=compressedQuality, optimize=True)
-                    stream_compressed = bs.getvalue()
-                else:
-                    assert compressionRatio != None or compressedQuality != None
-
-                    CR = int(round(compressionRatio)) if compressionRatio != None \
-                        else int(round(2 ** ((100 - compressedQuality)/10.0)))
-                    
-                    # image.save(bs, format='JPEG2000', quality_mode='rates', quality_layers = [0.1])
-
-                    # # The pylibjpeg-openjpeg is buggy: it produces images of much lower quality
-                    # from openjpeg import encode as openjpegEncode
-                    # import numpy as np
-                    # array = np.array(image)
-                    # print(f'JPEG2000 compression ratio: {CR}')
-                    # stream_compressed = openjpegEncode(array, compression_ratios=[CR * 4, CR * 3, CR * 2, CR])
-
-                    array = np.array(image)
-                    # Jp2k('_glymur_tmp.jp2', array, cratios=[CR*4, CR*2, CR])
-                    Jp2k('_glymur_tmp.jp2', array, cratios=[CR])
-                    stream_compressed = open('_glymur_tmp.jp2', 'rb').read()
-                    os.remove('_glymur_tmp.jp2')
-
-                # fix a bug found in some jpeg files
-                if compressionFormat == 'JPEG' and stream[-2:] != b'\xff\xd9':
-                    stream += b'\xff\xd9'
-
-            size, size_compressed = len(stream), len(stream_compressed)
-            # size gains of < 10% do not justify loss of quality in re-compression
-            if size_compressed * 10 < size * 9:
-                X = f'CR={int(CR * 100)/100}' if compressionFormat == 'JPEG2000' else f'Q={compressedQuality}'
-                msg(f're-compressed [{compressionFormat}, {X}]; ' + print_size_change(size, size_compressed))
-                stream = stream_compressed
-                filter = 'DCTDecode' if compressionFormat == 'JPEG' else 'JPXDecode'
             else:
-                msg(f'skipped re-compression [{compressionFormat}]; ' + print_size_change(size, size_compressed))
+                raise ValueError(f'bad filter: {obj.Filter}')
 
-        # PDF expects inverted CMYK JPEGs
-        if image.mode == 'CMYK' and filter == 'DCTDecode':
-            Decode = [1,0,1,0,1,0,1,0]
-            msg(f'CMYK JPEG: inserting /Decode = {Decode}')
+            if obj.DecodeParms and obj.Filter in ['/DCTDecode', '/JPXDecode', None]:
+                warn(f'ignoring /DecodeParms: {obj.DecodeParms}')
 
-        # Create the image XObject
-        xobj = IndirectPdfDict(
-            Type = PdfName.XObject,
-            Subtype = PdfName.Image,
-            Width = w, Height = h,
-            ColorSpace = cs,
-            BitsPerComponent = bpc,
-            Filter = PdfName(filter),
-            # ImageMask = ImageMask,
-            DecodeParms = DecodeParms,
-            Decode = Decode,
-            stream = py23_diffs.convert_load(stream) # Ugly, but necessary: https://github.com/pmaupin/pdfrw/issues/161
-        )
+            self.Mask = obj.Mask or obj.SMask
 
-        # Determine DPI
-        dpi = [float(x) for x in image.info['dpi']] if 'dpi' in image.info else None
-
-        return xobj, dpi
-
-    # -------------------------------------------------------------------- decode()
-
-    def decode(obj:IndirectPdfDict, pdfPage:PdfDict = None, invertCMYK = True, applyMasks = True, applyColorSpace = True, intent:str = 'native'):
-        '''
-        Returns a tuple (pil_image, encoded), encoded is the raw encoded image bytes stream, or (None, None)
-        if decoding fails.
-
-        If applyMasks is True, the soft mask (SMask) of the image, if present, becomes the alpha-channel of the
-        resulting image. At this stage, the conversion from the original non-RGB image.mode to
-        RGB occurs, which becomes RGBA after the insertion of the alpha-mask. The conversion
-        to RGB utilizes image's icc_profile.
-
-        if fixAdobeCMYK is True, the function checks if the image is an Adobe CMYK image
-        and, if so, fixes it by calling ImageUtils.pil_image_invert_cmyk_colors_if_needed().
-
-        Intent specifies pixel mapping during color space conversions. Allowed values are:
-        '/AbsoluteColorimetric', '/RelativeColorimetric', '/Saturation', '/Perceptual', 'native' or 'none'.
-
-        Note: if invertCMYK == True and the image is a /DecideCMYK with /DCTDecode (JPEG),
-        the /Decode array is always (!) applied, even if applyColorSpace == False.
-        [EXTEND THE DESCRIPTION]
-        '''
-
-        intents = ['/AbsoluteColorimetric', '/RelativeColorimetric', '/Saturation', '/Perceptual', 'native', 'none']
-
-        assert intent in intents
-
-        assert obj.Subtype in ['/Image', PdfName.Image]
-
-        if obj.stream == None:
-            warn(f'image has no stream: {obj}')
-            return None, None
-
-        # Remove compression for all filters except the image-specific ones
-        obj = PdfFilter.uncompress(obj)
-
-        # pprint(obj)
-
-        stream = py23_diffs.convert_store(obj.stream) if isinstance(obj.stream,str) else obj.stream
-
-        filter, parm = obj.Filter, obj.DecodeParms
-
-        width, height = int(obj.Width), int(obj.Height)
-
-        bpc = PdfImage.get_bpc(obj)
-
-        cs = PdfImage.get_colorspace(obj)
-        cs_name = PdfColorSpace.get_name(cs)
-        cpp = PdfColorSpace.get_cpp(cs)
-        mode = PdfColorSpace.get_mode(cs) if bpc != 1 else '1'
-
-        # msg(f'image specs: {bpc}, {cs}')
-
-        img = None
-        encoded = None
-        applyDecodeToDeviceCMYK = True
-
-        # ------------------------------------------------------------------------------------- Filters -> Image
-
-        if filter == None:
-
-            pass
-
-        elif filter in ['/CCITTFaxDecode', '/CCF']: # --> TIFF
-
-            # msg('/CCITTFaxDecode --> TIFF')
-            K = get_key(parm, '/K', '0')
-            BlackIs1 = get_key(parm, '/BlackIs1', 'false')
-            tiff_compression = 3 if int(K) >= 0 else 4
-            tiff_photometric = 0 if BlackIs1 == 'true' else 1
-            if obj.ImageMask == PdfObject('true'): tiff_photometric = 1 - tiff_photometric
-            encodedByteAlign = get_key(parm, '/EncodedByteAlign') == 'true'
-            if encodedByteAlign:
-                warn(f'/EncodedByteAlign == True not supported yet; skipping')
-                return None, None
-            img = ImageUtils.PDF_stream_to_PIL_TIFF(width, height, 1, 1,
-                                                    tiff_compression, tiff_photometric, stream,
-                                                    encodedByteAlign = encodedByteAlign)
-
-        elif filter == '/JBIG2Decode': # JBIG2 --> bitonal PNG
-
-            locals = py23_diffs.convert_store(obj.stream)
-            globals = py23_diffs.convert_store(PdfFilter.uncompress(obj.DecodeParms.JBIG2Globals).stream) \
-                if obj.DecodeParms != None and obj.DecodeParms.JBIG2Globals != None else None
-            with tempfile.TemporaryDirectory() as tmp:
-                T = lambda fileName: os.path.join(tmp, fileName)
-                open(T('locals'),'wb').write(locals) 
-                if globals:
-                    open(T('globals'),'wb').write(globals)
-                    OS.execute(['jbig2dec', '-e', '-o', T('out.png'), T('globals'), T('locals')])
-                else:
-                    OS.execute(['jbig2dec', '-e', '-o', T('out.png'), T('locals')])
-                img = Image.open(T('out.png'))
-
-            # If you have to re-assemble the JBIG2 file for some reason, just add the header:
-            # 1-page, sequential order; see JBIG2 Specs
-            # header = b'\x97\x4A\x42\x32\x0D\x0A\x1A\x0A\x01\x00\x00\x00\x01'
-
-        elif filter in ['/DCTDecode', '/DCT']: # --> JPEG
-
-            # msg('/DCTDecode --> JPEG')
-            if (ct := get_any_key(parm, '/ColorTransform')) is not None: warn(f'/DecodeParms: /ColorTransform {ct} ignored')
-            if (ct := get_any_key(parm, '/Decode')) is not None: warn(f'/DecodeParms: /Decode {ct} ignored')
-            img = Image.open(BytesIO(stream))
-            encoded = ['JPEG', stream]
-
-            # print(img.info)
-            # # img.info.clear()
-            # print(img.info)
-            
-        elif filter == '/JPXDecode': # --> JPEG 2000
-
-            # msg('/JPXDecode --> JPEG2000')
-            warn(f'JPEG2000 decoding is buggy')
-            img = Image.open(BytesIO(stream))
-            encoded = ['JPEG2000', stream]
+            # Invert /DeviceCMYK & /DeviceN JPEGs
+            # cs_name = PdfColorSpace.get_name(self.ColorSpace)
+            if self.pil and self.pil.mode == 'CMYK' and self.pil.format == 'JPEG':
+                msg(f'inverting CMYK JPEG after decoding')
+                self.set_pil(ImageChops.invert(self.pil))
 
         else:
-            warn(f'unsupported stream filter: {filter}')
-            return None, None
 
-        # ------------------------------------------------------------------------------------- Raw stream -> Array
+            if pil:
+                self.ColorSpace = PdfImage._pil_get_colorspace(pil)
+                self.bpc = 1 if pil.mode == '1' else 8
+                self.dpi = pil.info.get('dpi')
 
-        array = None if img != None else \
-            PdfFilter.unpack_pixels(stream, width, height, cpp, bpc, truncate = True)
+                # ???????????????????? PROCESS ALPHA ?????????????????????
+            
+            if jp2:
 
-        # ------------------------------------------------------------------------------------- Invert CMYK
+                self.set_jp2(jp2)
+                pil = Image.open(BytesIO(jp2))
+                self.dpi = pil.info.get('dpi')
 
-        if invertCMYK and img != None and img.format == 'JPEG' and cs_name == '/DeviceCMYK':
-            actualDecode  = PdfDecodeArray.get_actual(obj.Decode, cs, bpc)
-            if actualDecode == [1,0,1,0,1,0,1,0]:
-                msg('inverted CMYK + inverted /Decode = no change')
-                applyDecodeToDeviceCMYK = False
-            else:
-                msg('inverting CMYK')
-                img = ImageChops.invert(img)
-                encoded = None
-                defaultDecode = PdfDecodeArray.get_default(cs, bpc)
-                if actualDecode != defaultDecode:
-                    array = np.array(img); img = None
-                    array = PdfDecodeArray.decode(array, actualDecode, bpc)
-                    array = PdfDecodeArray.encode(array, defaultDecode)
+            if array is not None:
+                SImage.validate(array)
+                N = SImage.nColors(array)
+                self.ColorSpace = PdfName.DeviceGray if N == 1 \
+                                    else PdfName.DeviceRGB if N == 3 \
+                                    else PdfName.DeviceCMYK if N == 4 \
+                                    else None
+                self.bpc = 1 if SImage.isBitonal(array) else 8
+ 
+    # -------------------------------------------------------------------------------------- Basic functions
 
-        # ------------------------------------------------------------------------------------- A note
+    def w(self):
+        '''Returns width'''
+        return self.array.shape[1] if self.array is not None else self.pil.width
 
-        # From this point on: either img != None, or array != None, but not both
+    def h(self):
+        '''Returns height.'''
+        return self.array.shape[0] if self.array is not None else self.pil.height
 
-        # ------------------------------------------------------------------------------------- Apply Color Space
+    def get_cpp(self):
+        '''Returns components per pixel.'''
+        return PdfColorSpace.get_cpp(self.ColorSpace)
 
-        if applyColorSpace:
+    def get_mode(self):
+        '''Returns a PIL mode that is appropriate for the current colorspace and bpc values.'''
+        return PdfColorSpace.get_mode(self.ColorSpace, self.bpc)
 
-            # ------------------------------------------------------------------------------------- Decode
+    def to_bytes(self):
+        '''Returns pixel intensities as a bytes object.'''
+        return self.pil.tobytes() if self.pil else PdfFilter.pack_pixels(self.array, self.bpc)
 
-            actualDecode  = PdfDecodeArray.get_actual(obj.Decode, cs, bpc)
-            defaultDecode = PdfDecodeArray.get_default(cs, bpc)
+    def invert(self):
+        '''Inverts image'''
+        if self.pil: self.set_pil(ImageChops.invert(self.pil))
+        elif self.array is not None: self.set_array(SImage.invert(self.array))
+        else: raise ValueError(f'bad PdfImage: {self}')
 
-            # ------------------------------------------------------------------------------------- Apply colorSpace
+    def __str__(self):
+        '''Returns a string representation of the image that contains
+        various image parameters in a compact format'''
+        attrs = [a for a in ['pil','array','jp2','mask'] if self.__getattr__(a) is not None]
+        if self.isRendered: attrs.append('isRendered')
+        attrs = '/'.join(attrs)
+        return f'{self.w()}x{self.h()}, DPI={self.dpi}, CS={PdfColorSpace.get_name(self.ColorSpace)}' \
+                 + f', BPC={self.bpc}, STATE: {attrs}'
 
-            if cs_name == '/Indexed':
 
-                # In the /Indexed color space, all color space transformations are performed on the palette.
-                # Note: palette_cs is never /Indexed (see Adobe PDF Ref.)
+    # -------------------------------------------------------------------------------------- render()
 
-                # PDF standard allows for remapping of palette indices via Decode arrays (why?)
-                if actualDecode != defaultDecode:
-                    if array is None: array = np.array(img); img = None
-                    array = PdfDecodeArray.decode(array, actualDecode, bpc)
-                    array = np.clip(np.round(array),0,255).astype('uint8') # clip right away: no encoding step later
+    def render(self, pdfPage:PdfDict = None):
+        '''
+        '''
+        if self.isRendered:
+            warn('image already rendered; skipping')
+            return
+
+        msg('rendering started')
+
+        msg(f'applying image colorspace: {PdfColorSpace.toStr(self.ColorSpace)}')
+        self.apply_colorspace(self.ColorSpace, self.Mask) # Mask is needed to unmultiply alpha if necessary
+
+        # Apply page default colorspace
+        try:
+            # This will fail if cs is not among the entries of the page default colorspaces dict
+            cs2cs = {'/DeviceGray':'/DefaultGray', '/DeviceRGB':'/DefaultRGB', '/DeviceCMYK':'/DefaultCMYK'}
+            default_cs = pdfPage.Resources.ColorSpace[cs2cs[self.ColorSpace]]
+            msg(f'applying page default colorspace: {PdfColorSpace.toStr(default_cs)}')
+            self.apply_colorspace(default_cs)
+        except: pass
+
+        self.isRendered = True
+        msg('rendering ended')
+
+    # -------------------------------------------------------------------------------------- apply_colorspace()
+
+    def apply_colorspace(self, cs:CS_TYPE, mask:PdfDict):
+        '''
+        '''
+        actualDecode  = PdfDecodeArray.get_actual(self.Decode, cs, self.bpc)
+        defaultDecode = PdfDecodeArray.get_default(cs, self.bpc)
+
+        cs_name = PdfColorSpace.get_name(cs)
+
+        if cs_name == '/Indexed':
+
+            # In the /Indexed color space, all color space transformations are performed on the palette.
+            # Note: palette_cs is never /Indexed (see Adobe PDF Ref.)
+
+            # PDF standard allows for remapping of palette indices via Decode arrays (why oh why?)
+            if actualDecode != defaultDecode:
+                warn(f'decoding indices in the /Indexed colorspace; this is strange, check results')
+                array = self.get_array()
+                array = PdfDecodeArray.decode(array, actualDecode, self.bpc)
+                array = np.clip(np.round(array),0,255).astype('uint8') # clip right away: no encoding step later
+                self.set_array(array)
+                self.bpc = 8
+                self.Decode = None
                 
-                if img == None:
-                    img = Image.fromarray(array[...,0], mode='P')
-                    array = None
-    
-                # Get palette
-                palette_cs, palette_array, = PdfColorSpace.get_palette(cs)
+            # Transform the palette
+            palette_cs, palette_array = PdfColorSpace.get_palette(cs)
 
-                # Decode palette
-                palette_decode = PdfDecodeArray.get_default(palette_cs, 8)
-                palette_array = PdfDecodeArray.decode(palette_array, palette_decode, 8)
+            if PdfColorSpace.get_name(palette_cs) in ['/Separation', '/DeviceN', '/NChannel']:
 
                 # Apply palette_cs to palette_array; both palette_array & palette_cs can change
-                palette_cs, icc_profile, palette_array = \
-                    PdfColorSpace.apply_colorspace(palette_cs, palette_array)
-
-                # Encode palette
                 palette_decode = PdfDecodeArray.get_default(palette_cs, 8)
-                palette_array = PdfDecodeArray.encode(palette_array, palette_decode)
+                palette_array = np.array([palette_array])
+                palette_cs, palette_array = PdfColorSpace.reduce(palette_cs, palette_array, palette_decode, 8, mask)
+                palette_array = palette_array[0]
 
-                img.putpalette(palette_array.tobytes(), rawmode=PdfColorSpace.get_mode(palette_cs))
+                # Create new /Indexed colorspace
+                self.ColorSpace = PdfArray([PdfName.Indexed, palette_cs, palette_array.shape[0], palette_array.tobytes()])
 
-            elif cs_name in ['/Separation', '/DeviceN', '/NChannel']:
+            # Reduce palette; comment this of if you do not want render() to reduce palettes
+            self.ColorSpace = palette_cs
+            self.set_array(palette_array[self.get_array()])
+            self.bpc = 8
+            self.Decode = None
 
-                # img -> array
-                if array is None: array = np.array(img); img = None; encoded = None
+        elif cs_name in ['/Separation', '/DeviceN', '/NChannel'] or actualDecode != defaultDecode:
 
-                # Decode
-                array = PdfDecodeArray.decode(array, actualDecode, bpc)
+            self.ColorSpace, array = PdfColorSpace.reduce(cs, self.get_array(), actualDecode, self.bpc, mask)
+            self.set_array(array)
+            self.bpc = 8
+            self.Decode = None
 
-                # Apply cs to array; both array & cs can change
-                cs, icc_profile, array = PdfColorSpace.apply_colorspace(cs, array)
+    # -------------------------------------------------------------------------------------- change_mode()
 
-                # Encode
-                defaultDecode = PdfDecodeArray.get_default(cs, 8)
-                array = PdfDecodeArray.encode(array, defaultDecode)
+    def change_mode(self, mode:str, intent:str = '/Perceptual'):
+        '''
+        Changes image mode. The mode argument can be any one of: 'L', 'RGB', 'CMYK'
+        '''
+        assert self.isRendered
 
+        if mode not in ['L', 'RGB', 'CMYK']: raise ValueError(f'bad mode: {mode}')
 
-            elif cs_name == '/JPX': # Internal color space (surrogate) from the JPEG2000 file stream
-
-                icc_profile = img.info['icc_profile'] if img != None and img.format == 'JPEG2000' else None
-
+        if mode == self.get_mode() and self.ColorSpace in [PdfName.DeviceGray, PdfName.DeviceRGB, PdfName.DeviceCMYK]:
+            warn(f'old and new modes are the same: {mode}')
+            return False
+        
+        if self.get_mode() == '1':
+            if mode == 'L':
+                if self.array: self.set_array(SImage.toGray(self.array))
+                elif self.pil: self.set_pil(self.pil.convert('L'))
+                else: raise ValueError(f'bad PdfImage: {self}')
+                return True
+            elif mode == 'RGB':
+                if self.array: self.set_array(SImage.toColor(self.array))
+                elif self.pil: self.set_pil(self.pil.convert('RGB'))
+                else: raise ValueError(f'bad PdfImage: {self}')
+                return True
             else:
+                warn(f'cannot convert {"1"} --> {mode}')
+                return False
 
-                # Encode & decode, if necessary
-                if actualDecode != defaultDecode and applyDecodeToDeviceCMYK:
-                    # img -> array
-                    if array is None: array = np.array(img); img = None; encoded = None
-                    array = PdfDecodeArray.decode(array, actualDecode, bpc)
-                    array = PdfDecodeArray.encode(array, defaultDecode)
 
-                # Get ICC Profile
-                icc_profile = PdfColorSpace.get_icc_profile(cs) \
-                    if cs_name in ['/CalGray', '/CalRGB', '/Lab', '/ICCBased'] else None
+        # Render
+        pil = self.get_pil()
 
-        # ------------------------------------------------------------------------------------- Make image
+        # Get intent
+        intents = {'/Perceptual': ImageCms.Intent.PERCEPTUAL,
+                   '/RelativeColorimetric': ImageCms.Intent.RELATIVE_COLORIMETRIC,
+                   '/Saturation': ImageCms.Intent.SATURATION,
+                   '/AbsoluteColorimetric': ImageCms.Intent.ABSOLUTE_COLORIMETRIC }
+        renderingIntent = intents.get(intent, ImageCms.Intent.PERCEPTUAL)
 
-        # Make image
-        if img == None:
-            mode = '1' if bpc == '1' else PdfColorSpace.get_mode(cs)
-            if mode not in ['1', 'L']:
-                img = Image.fromarray(array, mode=mode)
-            elif mode == 'L':
-                img = Image.fromarray(array[...,0], mode='L')
+        msg(f'converting {pil.mode} --> {mode} (intent = {intent})')
+
+        # Standard sRGB & CMYK profiles
+        cmyk_profile = ImageCms.ImageCmsProfile(BytesIO(CMYK_DEFAULT_ICC_PROFILE))
+        srgb_profile = ImageCms.createProfile('sRGB')
+
+        # Input profile
+        icc_profile = PdfColorSpace.get_icc_profile(self.ColorSpace)
+        input_profile = ImageCms.ImageCmsProfile(BytesIO(icc_profile)) if icc_profile \
+                            else cmyk_profile if pil.mode == 'CMYK' \
+                            else srgb_profile if pil.mode in ['RGB', 'P'] else None
+        if not input_profile:
+            warn(f'cannot convert {self.get_mode()} --> {mode}')
+            return False
+
+        # Output profile
+        output_profile = cmyk_profile if mode == 'CMYK' else srgb_profile if mode == 'RGB' else None
+
+        if not output_profile:
+            # Conversion to L: first convert to RGB to account for input_profile, then to L
+            # image = ImageCms.profileToProfile(image, input_profile, srgb_profile,
+            #                                 renderingIntent = renderingIntent, outputMode='RGB')
+            pil = pil.convert('L')
+        else:
+            pil = ImageCms.profileToProfile(pil, input_profile, output_profile,
+                                            renderingIntent = renderingIntent, outputMode=mode)
+        
+        if 'icc_profile' in pil.info: del pil.info['icc_profile']
+
+        self.ColorSpace = PdfName.DeviceGray if pil.mode == 'L' \
+                            else PdfName.DeviceRGB if pil.mode == 'RGB' \
+                            else PdfName.DeviceCMYK
+                            # else PdfColorSpace.make_icc_based_colorspace(CMYK_DEFAULT_ICC_PROFILE, N=4)
+
+        self.set_pil(pil)
+
+    # -------------------------------------------------------------------------------------- get_pil()
+
+    def get_pil(self):
+        '''
+        Creates a PIL Image representation in self.pil, if not yet created, and returns it.
+        '''
+        if not self.pil:
+            assert self.array is not None and self.ColorSpace != None and self.bpc != None
+            msg('array -> pil')
+            mode = PdfColorSpace.get_mode(self.ColorSpace, self.bpc)
+            # A PIL bug: https://stackoverflow.com/questions/50134468/convert-boolean-numpy-array-to-pillow-image
+            self.pil = Image.fromarray(self.array, mode = mode) if mode != '1' \
+                else Image.frombytes(mode='1', size=self.array.shape[::-1], data=np.packbits(self.array, axis=1))
+        return self.pil
+
+    # -------------------------------------------------------------------------------------- get_array()
+
+    def get_array(self):
+        '''
+        Creates a numpy array representation in self.array, if not yet created, and returns it.
+        '''
+        if self.array is None:
+            assert self.pil
+            msg('pil -> array')
+            self.array = np.array(self.pil)
+        SImage.validate(self.array)
+        return self.array
+
+    # -------------------------------------------------------------------------------------- set_pil()
+
+    def set_pil(self, pil:Image.Image):
+        '''
+        Sets self.pil to the given PIL image, and self.array & self.jp2 to None
+        '''
+        self.pil = pil
+        self.array = None
+        self.jp2 = None
+
+    # -------------------------------------------------------------------------------------- set_array()
+
+    def set_array(self, array:np.ndarray):
+        '''
+        Sets self.array to the given numpy image array, and self.pil & self.jp2 to None
+        '''
+        self.pil = None
+        self.array = array
+        self.jp2 = None
+
+    # -------------------------------------------------------------------------------------- set_jp2()
+
+    def set_jp2(self, jp2:bytes):
+        '''
+        Sets self.jp2 to the jp2 image given as bytes, and self.pil & self.array to None.
+
+        This function also sets self.array, self.bpc.
+        Additionally, if self.ColorSpace is None it is also set: any user-specified
+        self.ColorSpace (read from a PDF image dictionary) override JPEG2000 internal
+        color space according to PDF Ref.
+
+        Having self.array, self.ColorSpace and self.bpc set allows for subsequent image analysis/modification.
+        This leaves self.jp2 as a kind of storage for the original JPEG2000 file's bytes
+        in case we want to save the jp2 image data without re-encoding.
+        '''
+        self.array, jp2_cs, self.bpc = PdfImage._jp2_read(jp2)
+        if not self.ColorSpace: self.ColorSpace = jp2_cs # obj.ColorSpace overrides internal JPX colorspace
+        self.pil = None
+
+    # -------------------------------------------------------------------------------------- resize()
+
+    def resize(self, width:int, height:int):
+        '''
+        Resize the image to the given dimensions.
+        '''
+        self.set_pil(self.get_pil().resize((width, height)))
+
+    # -------------------------------------------------------------------------------------- saveAs
+
+    def saveAs(self, Format:str,
+                    Q:float = None,
+                    CR:float = None,
+                    optimize = True,
+                    render = False,
+                    intent:str = '/Perceptual',
+                    embedProfile:bool = True,
+                    invertCMYK = False):
+        '''
+        Returns a tuple `(imageStream[bytes], fileExtension[str])`.
+        The encoding is done in the given `Format` using the
+        `Q` (quality), `CR` (compression ratio) and `optimize` parameters.
+
+        The image has to be rendered first in order to produce a faithful representation.
+        '''
+        ext = {'TIFF':'.tif', 'PNG':'.png', 'JPEG':'.jpg', 'JPEG2000':'.jp2', 'JBIG2':'jb2'}
+
+        addAlpha = render and self.Mask
+
+        if Format == 'JPEG' and addAlpha:
+            raise ValueError(f'cannot save an image transparency as JPEG')
+
+        if Format == 'auto':
+            Format = self.pil.format if self.pil and self.pil.format in ext \
+                        else 'JPEG2000' if self.jp2 \
+                        else 'TIFF'
+            if addAlpha and Format == 'JPEG':
+                Format = 'TIFF'
+
+        if Format not in ext: raise ValueError(f'cannot save in format: {Format}')
+
+        if addAlpha:
+            msg('rendering alpha')
+            alpha = PdfImage(obj = self.Mask)
+            alpha.render()
+            if alpha.w() != self.w() or alpha.h() != self.h():
+                if self.w() * self.h() > alpha.w() * alpha.h():
+                    msg(f'resizing alpha to fit image')
+                    alpha.resize(self.w(), self.h())
+                else:
+                    msg(f'resizing image to fit alpha')
+                    self.resize(alpha.w(), alpha.h())
+
+            # # ???????????????????????????????
+            # if alpha.mode == '1':
+            #     alpha = alpha.convert('L')
+
+        if Format == 'JPEG2000':
+
+            if self.jp2:
+                stream  = py23_diffs.convert_load(self.jp2)
             else:
-                # A bug in PIL: https://stackoverflow.com/questions/32159076/python-pil-bitmap-png-from-array-with-mode-1
-                img = Image.fromarray(array[...,0].astype('uint8')*255, mode='L').convert('1')
-            array = None
+                assert Q or CR
+                if Q: assert 0 < Q <= 100
+                if CR: assert CR > 1
+                stream = PdfImage._jp2_write(self.get_array(),
+                                            alpha.get_array() if addAlpha else None,
+                                            self.Colorspace,
+                                            Q, CR)
+        else:
+ 
+            # Create pil
+            pil = self.get_pil()
 
-        # ------------------------------------------------------------------------------------- Default color spaces
+            if render:
+                msg('rendering pil')
+                self.render()
+                if addAlpha and self.get_mode() not in ['L', 'RGB']:
+                    self.change_mode('RGB' if self.get_mode() != '1' else 'L', intent)
+                pil = self.get_pil()
+                PdfImage._pil_set_colorspace(pil, self.ColorSpace)
 
-        if applyColorSpace:
+                if addAlpha:
+                    msg('adding alpha')
+                    # alpha.render()
+                    assert alpha.get_cpp() == 1
+                    alpha.change_mode('RGB' if alpha.get_mode() != '1' else 'L', intent)
+                    alpha_pil = alpha.get_pil()
+                    # invert bitonal masks
+                    if self.Mask.ImageMask == PdfObject('true'):
+                        alpha_pil = ImageChops.invert(alpha_pil)
+                    PdfImage._pil_set_colorspace(alpha_pil, alpha.ColorSpace)
+                    pil.putalpha(alpha_pil)
 
-            # Insert ICC profile
-            img.info['icc_profile'] = icc_profile
+            if invertCMYK and pil.mode == 'CMYK' and Format == 'JPEG':
+                msg('inverting CMYK JPEG before encoding')
+                pil = ImageChops.invert(pil)
 
-            # Apply default page color space ICC profile, if present
-            if img.info.get('icc_profile', None) == None:
-                PdfColorSpace.apply_default_page_colorspace_icc_profile(pdfPage, img)
+            bs = BytesIO()
+            Q = Q if Q else 'keep' if pil.format == 'JPEG' and Format == 'JPEG' else 100
+            msg(f'saving with Format = {Format}, Q = {Q}')
+            # tiff_compression = 'group4' if pil.mode == '1' else 'tiff_lzw' if Format == 'TIFF' else None
+            tiff_compression = 'group4' if pil.mode == '1' else 'tiff_adobe_deflate' if Format == 'TIFF' else None
+            icc_profile = pil.info.get('icc_profile') if pil.info and embedProfile else None
 
-            # Remember icc_profile
-            icc_profile = img.info.get('icc_profile', None)
+            if Format == 'JPEG':
+                pil.save(bs, Format, quality=Q, optimize = optimize, icc_profile = icc_profile, info = pil.info)
+            elif Format == 'PNG':
+                pil.save(bs, Format, optimize = optimize, icc_profile = icc_profile)
+            elif Format == 'TIFF':
+                pil.save(bs, Format, compression = tiff_compression, icc_profile = icc_profile)
+            else:
+                raise ValueError(f'format not supported in saveAs(): {Format}')
+ 
+            stream = bs.getvalue()
 
-        # ------------------------------------------------------------------------------------- Masks
+            # A bug found in some JPEG files
+            if Format == 'JPEG' and stream[-2:] != b'\xff\xd9':
+                raise ValueError('bad JPEG stream')
+                # stream += b'\xff\xd9'
 
-        obj_mask = obj.Mask if obj.Mask != None else obj.SMask if obj.SMask != None else None
-        if applyMasks and obj_mask != None:
+        return stream, ext[Format]
 
-            # print("Mask -->", obj_mask)
-            # msg('Mask decoding started')
-            mask, _ = PdfImage.decode(obj_mask)
-            # msg('Mask decoding ended')
 
-            if mask.mode == '1':
-                mask = ImageChops.invert(mask).convert('L') # Black is 1 in Mask
-            if mask.size != img.size:
-                # msg("Resizing Mask")
-                mask = mask.resize(img.size)
+    # -------------------------------------------------------------------------------------- to_pdf_page()
 
-            if obj_mask.Matte != None: # Pre-multiplied alpha
-                
-                matte_color = tuple(round(255*float(x)) for x in obj_mask.Matte)
-                # msg(f'Undoing alpha pre-blending with Matte color: {matte_color}')
-
-                mode = img.mode
-                color = np.array(img).astype('int32')
-
-                cpp = color.shape[2]
-                # if len(matte_color) > cpp: matte_color = matte_color[:cpp]
-                matte = np.tile(np.array(matte_color,dtype='int32'), (height, width, 1))
-                alpha = np.tile(np.array(mask)[...,None], cpp).astype('int32')
-                alpha = np.clip(alpha, 1,255)
-
-                # Un-multiply
-                unmultiplied =  matte + ((color - matte) * 255) // alpha
-                unmultiplied = np.clip(unmultiplied, 0, 255).astype('uint8')
-
-                img = Image.fromarray(unmultiplied, mode=mode)
-
-                # Restore icc_profile
-                img.info['icc_profile'] = icc_profile
-
-            if img.mode != 'RGB':
-                intent = None if intent=='none' else obj.Intent if intent == 'native' else intent
-                msg(f"Converting {img.mode} to sRGB with rendering intent: {intent}")
-                img = ImageUtils.pil_image_to_srgb(img, intent)
-                if 'icc_profile' in img.info: del img.info['icc_profile']
-
-            # msg("Inserting alpha: RGB + Mask --> RGBA")
-            img.putalpha(mask)
-            img.format = 'PNG'
-
-            encoded = None
-
-        return img, encoded
-
-    # -------------------------------------------------------------------- get_bpc()
-
-    def get_bpc(obj:PdfDict):
+    def to_pdf_page(self):
         '''
-        Returns bits per pixel
+        Convert the image to a PDF page.
         '''
-        if obj.Subtype != '/Image': raise ValueError(f"Not an image: {obj}")
-        return 1 if obj.ImageMask == PdfObject('true') \
-            else None if obj.Filter == PdfName.JPXDecode \
-            else int(obj.BitsPerComponent)
+        # Encode image
+        xobj = self.encode()
+        print('RESULT:')
+        pprint(xobj)
 
-    # -------------------------------------------------------------------- get_colorspace()
+        dpi = self.dpi if self.dpi not in [None, (1,1)] else (72,72)
 
-    def get_colorspace(obj:PdfDict):
+        # Create page
+        w,h = self.w(), self.h()
+        w,h = w * 72/dpi[0], h*72/dpi[1]
+        p = lambda x: round(x*1000000)/1000000
+        q = lambda x: f'{p(x):f}'.rstrip('0').rstrip('.')
+        page = IndirectPdfDict(
+            Type = PdfName.Page,
+            MediaBox = [0, 0, p(w), p(h)],
+            Contents = IndirectPdfDict(stream=f'{q(w)} 0 0 {q(h)} 0 0 cm\n/Im1 Do\n'),
+            Resources = PdfDict(XObject = PdfDict(Im1 = xobj))
+        )
+
+        return page
+
+    # -------------------------------------------------------------------------------------- compress()
+
+    @staticmethod
+    def recompress(image_obj:IndirectPdfDict, Format:str = None, Q:float = None, CR:float = None):
         '''
-        Returns obj.ColorSpace if it's set, or /DeviceGray if obj.ImageMask == true,
-        or /JPX (a surrogate color space) if obj.Filter == /JPXDecode, or None otherwise.
+        (Re-)compress image stream. The format can be any one of:
+        
+        * 'ZIP': compress with /FlateDecode without PNG predictors
+        * 'PNG': compress with /FlateDecode with PNG predictors
+        * 'JPEG': compress with /DCTDecode; compressionRatio should be specified
+        * 'JPEG2000': compress with /JPXDecode; either compressedQuality or compressionRatio should be specified
+
+        The obj.stream is replaced only if the (re-)compression decreases stream size. An exception to this
+        is the 'ZIP' compression format, for which the stream is always (re-)compressed, even if
+        its size increases as a result. Therefore use 'ZIP' to (re-)compress only if you need
+        the /FlateDecode filter for compatibility/tests. For stream size reduction with
+        /FlateDecode try 'PNG' compression instead.
+
+        Returns True/False depending on whether image stream has been replaced.
         '''
-        if obj.Subtype != '/Image': raise ValueError(f"Not an image: {obj}")
-        return obj.ColorSpace if obj.ColorSpace != None \
-            else '/DeviceGray' if obj.ImageMask == PdfObject('true') \
-            else '/JPX' if obj.Filter == '/JPXDecode' else None
 
-    # -------------------------------------------------------------------- inline_image_to_image_obj()
+        def print_size_change(size_old, size_new):
+            return f'Size: {size_old} --> {size_new} ({((size_new - size_old)*100)//size_old:+d}%)'
 
-    def inline_image_to_image_obj(inline_img:list):
+        size_old = int(image_obj.Length)
+
+        obj = PdfFilter.uncompress(image_obj)
+        image = PdfImage(obj = obj)
+
+        if PdfColorSpace.get_name(image.ColorSpace) == '/Indexed':
+            msg('/Indexed colorspace will not be recompressed')
+            return False
+        
+        bpc = image.bpc
+        cs = image.ColorSpace
+
+        DecodeParms = None
+ 
+        if Format == 'ZIP':
+
+            stream = zlib.compress(image.to_bytes())
+            Filter = PdfName('FlateDecode')
+
+        elif Format == 'PNG':
+
+            if image.get_mode() not in ['L', 'RGB']:
+                msg(f'mode {image.get_mode()} not supported by PNG; skipping')
+                return False
+
+            png, _ = image.saveAs('PNG')
+            stream, Predictor = PdfImage._png_get_stream_and_filter(png)
+            Filter = PdfName('FlateDecode')
+            DecodeParms = PdfDict(Predictor = Predictor, # PDF Spec.: actual value doesn't matter a.l.a. it's 10..15
+                                    Colors = PdfColorSpace.get_cpp(cs),
+                                    BitsPerComponent = bpc,
+                                    Columns = image.w())
+
+        elif Format == 'JPEG':
+
+            stream, _ = image.saveAs('JPEG', Q, invertCMYK = True)
+            Filter = PdfName('DCTDecode')
+
+        elif Format == 'JPEG2000':
+
+            assert Q or CR
+            if Q: assert 0 < Q <= 100
+            if CR: assert CR > 1
+
+            stream, _ = image.saveAs('JPEG2000', Q, CR)
+            Filter = PdfName('JPXDecode')
+
+        else:
+            raise ValueError(f'bad Format: {Format}')
+
+        # Compare sizes before/after
+        size_new = len(stream)
+        if Format == 'ZIP' or size_new * 10 < size_old * 9:
+            msg(f're-compressing {obj.Filter} --> {Filter}: {print_size_change(size_old, size_new)}')
+            obj.stream = stream.decode('Latin-1')
+            obj.Filter = Filter
+            obj.DecodeParms = DecodeParms
+            # obj.BitsPerComponent = bpc
+            # obj.ColorSpace = cs
+
+            PdfImage.xobject_copy(obj, image_obj)
+
+            return True
+        else:
+            msg(f'skipping {obj.Filter} --> {Filter}: {print_size_change(size_old, size_new)}')
+            return False
+
+    # -------------------------------------------------------------------------------------- encode()
+
+    def encode(self):
+        '''
+        '''
+        DecodeParms = None
+        Decode = None
+
+        if self.bpc == 1:
+
+            Filter = 'CCITTFaxDecode'
+            pil = self.get_pil()
+            stream = PdfImage._tiff_get_strip(PdfImage._tiff_write(pil))
+            DecodeParms = PdfDict(K = -1,
+                                  Columns = self.w(),
+                                  Rows = self.h(),
+                                  BlackIs1 = PdfObject('true'))
+            
+        elif self.jp2:
+
+            Filter = 'JPXDecode'
+            stream = py23_diffs.convert_load(self.jp2)
+
+        elif not self.pil or self.pil.format in ['RAW', 'GIF', 'PNG', 'TIFF', 'JPEG2000', None]:
+
+            Filter = 'FlateDecode'
+            stream = zlib.compress(self.to_bytes())
+ 
+        elif self.pil.format == 'JPEG':
+
+            Filter = 'DCTDecode'
+            stream, _ = self.saveAs('JPEG', embedProfile = False, invertCMYK = True)
+
+        else:
+            raise ValueError(f'unsupported format: {self.pil.format}')
+
+        return IndirectPdfDict(
+            Type = PdfName.XObject,
+            Subtype = PdfName.Image,
+            Width = self.w(),
+            Height = self.h(),
+            BitsPerComponent = self.bpc,
+            ColorSpace = self.ColorSpace,
+            Filter = PdfName(Filter),
+            DecodeParms = DecodeParms,
+            Decode = Decode or self.Decode,
+            stream = py23_diffs.convert_load(stream)
+        )
+
+
+    # -------------------------------------------------------------------------------------- jbig2_encode()
+
+    # @staticmethod
+    # def jbig2_encode():
+    #     '''
+    #     '''
+
+    #     # stream = self.jbig2[0]
+    #     # Filter = 'JBIG2Decode'
+    #     # if self.jbig2[1]:
+    #     #     globals = IndirectPdfDict(Filter = PdfName.FlateDecode, stream = zlib.compress(self.jbig2[1]))
+    #     # DecodeParms = PdfDict(JBIG2Globals = globals)
+
+    # -------------------------------------------------------------------------------------- xobject_from_inline_image()
+
+    @staticmethod
+    def xobject_from_inline_image(inline_img:list):
         '''Converts a PDF inline image (represented as an element of a parsed PDF stream tree: ['BI', [{header_dict}, "data_str"]])
         to a PDF image object. This helps treat both inline and object images in PDF in a uniform way.
         '''
@@ -895,9 +1110,10 @@ class PdfImage:
 
         return obj
 
-    # -------------------------------------------------------------------- inline_image_to_image_obj()
+    # -------------------------------------------------------------------------------------- xobject_to_inline_image_stream()
 
-    def image_obj_to_inline_image_stream(obj:PdfObject):
+    @staticmethod
+    def xobject_to_inline_image_stream(obj:PdfObject):
         '''
         Converts a PDF image xobject to a PDF inline image stream.
         '''
@@ -922,303 +1138,202 @@ class PdfImage:
 
         return s
 
-    # -------------------------------------------------------------------- pil_image_to_pdf_page()
+    # -------------------------------------------------------------------------------------- xobject_get_bpc()
 
-    def pil_image_to_pdf_page(image:Image.Image):
-        '''Converts a PIL image to a PDF page: the page size is set automatically
-        so that the image fills entire page at given resolution.
-        The dpi, which is a tuple (xdpi, ydpi), overrides any dpi extracted from the input image.
-        If no resolution is specified and none can be extracted from the input image, the
-        value of (72,72) is used.
-
-        The function returns a tuple (pdfPage, dpiActual), where
-        dpiActual is the actual resolution used in placing the image on the page.
-        
-
-        During the transformation, the function is able to preserve transparency and color profiles.
-        It achieves this by essentially doing all the steps in PdfImage.decode() in reverse order:
-        * Encodes alpha channel as the SMask attribute of the PDF image XObject
-        * Stores icc_profile in pdfPage.Resources.ColorSpace (the default color space profile
-        for the image's color space)
+    @staticmethod
+    def xobject_get_bpc(obj:PdfDict):
         '''
-
-        # Encode image
-        xobj, dpi = PdfImage.encode(image)
-        if dpi == None: dpi = (72,72)
-        print(xobj)
-
-        # Create page
-        w,h = image.size
-        w,h = w * 72/dpi[0], h*72/dpi[1]
-        p = lambda x: round(x*1000000)/1000000
-        q = lambda x: f'{p(x):f}'.rstrip('0').rstrip('.')
-        page = IndirectPdfDict(
-            Type = PdfName.Page,
-            MediaBox = [0, 0, p(w), p(h)],
-            Contents = IndirectPdfDict(stream=f'{q(w)} 0 0 {q(h)} 0 0 cm\n/Im1 Do\n'),
-            Resources = PdfDict(XObject = PdfDict(Im1 = xobj))
-        )
-
-        return page, dpi
-
-    # -------------------------------------------------------------------- size()
-
-    def size(obj:PdfObject):
+        Returns bits per pixel
         '''
-        Calculates the size of the PDF object as a sum of lengths of all dictionary streams that the object refers to.
-        This means ignoring the so-called document overhead - the space taken by the dictionary header structures.
-        This also means that PdfImage.size(obj) == 0 if obj is neither a PdfDict nor a PdfArray.
+        if obj.Subtype != PdfName.Image: raise ValueError(f"Not an image: {obj}")
+        return 1 if obj.ImageMask == PdfObject('true') \
+            else None if obj.Filter == PdfName.JPXDecode \
+            else int(obj.BitsPerComponent)
+
+    # -------------------------------------------------------------------------------------- xobject_get_colorspace()
+
+    @staticmethod
+    def xobject_get_cs(obj:PdfDict) -> CS_TYPE:
         '''
-        if isinstance(obj, PdfDict):
-            return sum(PdfImage.size(v) for v in obj.values()) + (int(obj.Length) if obj.Length != None else 0)
-        elif isinstance(obj, PdfArray):
-            return sum(PdfImage.size(v) for v in obj)
-        else:
-            return 0
-
-    # -------------------------------------------------------------------- modify_image_xobject()
-
-    def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:PdfDict):
+        Returns obj.ColorSpace if it's set, or /DeviceGray if obj.ImageMask == true,
+        or None otherwise.
         '''
-        This function performs in-place modifications of an image object, such as: JPEG/JPEG2000
-        compression, resizing/upsampling, color space conversions.
+        if obj.Subtype != PdfName.Image: raise ValueError(f"Not an image: {obj}")
+        return obj.ColorSpace if obj.ColorSpace != None \
+            else PdfName.DeviceGray if obj.ImageMask == PdfObject('true') \
+            else None
+
+    # -------------------------------------------------------------------------------------- xobject_copy()
+
+    @staticmethod
+    def xobject_copy(obj_from:IndirectPdfDict, obj_to:IndirectPdfDict):
         '''
-
-        obj_masks = [image_obj.Mask, image_obj.SMask]
-
-        if options.predictors:
-            msg('Checking images PNG predictors')
-            _ = PdfFilter.uncompress(image_obj)
-            for mask in obj_masks:
-                if mask == None: continue
-                msg('Checking mask PNG predictors')
-                _ = PdfFilter.uncompress(mask)
-            return
-
-        # A lambda for printing out size changes in the form old_size --> new size (+-change%)
-        print_size_change = lambda size_old, size_new: \
-            f'Size: {size_old} --> {size_new} ({((size_new - size_old)*100)//size_old:+d}%)'
-
-        # ColorSpace
-        cs = PdfImage.get_colorspace(image_obj)
-        bpc = PdfImage.get_bpc(image_obj)
-
-        # Decode image
-        applyColorSpace = options.colorspace == 'rgb' and PdfColorSpace.get_name(cs) != '/DeviceRGB' and bpc != 1 \
-                            or options.gray and img.mode not in ['L', '1'] \
-                            or options.bitonal and img.mode != '1'
-        msg(f'Image decoding started, applyColorSpace = {applyColorSpace}')
-        img, _ = PdfImage.decode(image_obj, pdfPage,
-                                        invertCMYK = True,
-                                        applyMasks = applyColorSpace,
-                                        applyColorSpace = applyColorSpace,
-                                        intent = options.intent)
-        msg('Image decoding ended')
-
-        if img == None: warn(f'Failed to decode image'); return
-
-
-        # Force CMYK --> RGB, if requested (unless CMYK is actually /DeviceN)
-        if options.colorspace == 'rgb' and img.mode not in ['RGB','RGBA','1']:
-            intent = image_obj.Intent if options.intent == 'native' else options.intent
-            msg(f'Forcing {img.mode} --> RGB with rendering intent: {intent}')
-            img = ImageUtils.pil_image_to_srgb(img, intent)
-            if 'icc_profile' in img.info: del img.info['icc_profile']
-
-        # Convert to gray
-        if options.gray and img.mode not in ['L', '1']:
-            msg(f'Conversion {img.mode} --> L')
-            img = img.convert('L')
-            if 'icc_profile' in img.info: del img.info['icc_profile']
-
-        # Convert to bitonal
-        if options.bitonal and img.mode != '1':
-            msg(f'Conversion {img.mode} --> 1')
-            img = img.convert('1', dither=Image.Dither.NONE)
-            if 'icc_profile' in img.info: del img.info['icc_profile']
-
-        # Resizing
-        if options.bicubic or options.upsample:
-            f = options.bicubic
-            if options.upsample:
-                from simage.simage import SImage
-            w,h = img.size
-
-            if options.bicubic:
-                msg(f'Resizing image by factor {f}')
-                img = img.resize((int((w+0.5/f)*f), int((h+0.5/f)*f)), resample=Image.Resampling.BICUBIC)
-
-            if options.upsample:
-                msg(f'Upsampling image, alpha = {options.alpha}, bounds = {options.bounds}')
-                array = np.array(img)
-                array = SImage.scale2x(array) if SImage.isBitonal(array) else \
-                    SImage.superResolution(array, alpha = options.alpha, bounds = options.bounds)
-
-                # A bug in PIL: https://stackoverflow.com/questions/32159076/python-pil-bitmap-png-from-array-with-mode-1
-                img = Image.fromarray(array, mode = img.mode) if img.mode != '1' \
-                        else Image.fromarray(array.astype('uint8')*255, mode = 'L').convert('1')
-
-            if not applyColorSpace:
-
-                obj_masks_downsampled = []
-
-                for obj_mask in obj_masks:
-                    if obj_mask == None: obj_masks_downsampled.append(None); continue
-                    msg('Mask decoding started')
-                    mask, encoded = PdfImage.decode(obj_mask) # Should this be rendered with colorSpace applied?
-
-                    msg('Mask decoding ended')
-                    msg(f'Mask mode: {mask.mode}')
-
-                    if options.bicubic:
-                        msg(f'Resampling mask by factor {f}')
-                        mask = mask.resize((int(round(w/f)), int(round(h/f))), resample=Image.Resampling.BICUBIC)
-
-                    if options.upsample:
-                        msg(f'Upsampling mask, alpha = {options.alpha}, bounds = {options.bounds}')
-                        array = np.array(mask)
-                        array,_ = SImage.scale2x(array) if SImage.isBitonal(array) else \
-                            SImage.superResolution(array, alpha = options.alpha, bounds = options.bounds)
-                        if mask.mode != '1':
-                            mask = Image.fromarray(array, mode = mask.mode)
-                        else:
-                            # A bug in PIL: https://stackoverflow.com/questions/32159076/python-pil-bitmap-png-from-array-with-mode-1
-                            mask = Image.fromarray(array.astype('uint8')*255, mode = 'L').convert('1')
-                        
-                    msg(f'Mask mode: {mask.mode}')
-                    compressionFormat = 'JPEG' if options.jpeg and mask.mode != '1' else None
-                    msg(f"Mask encoding started, compress = {compressionFormat or 'ZIP'}")
-                    obj_mask_new,_ = PdfImage.encode(mask,
-                                                 compressionFormat = compressionFormat,
-                                                 compressedQuality = options.quality)
-                    msg('Mask encoding ended')
-
-                    obj_mask_new.Matte = obj_mask.Matte
-                    obj_mask_new.ImageMask = obj_mask.ImageMask
-                    obj_masks_downsampled.append(obj_mask_new)
-
-                obj_masks = obj_masks_downsampled
-
-
-        # Convert PIL image to a PDF Image XObject and compress it with jpegQuality (if it's != 'keep')
-        compressionFormat = 'JPEG' if options.jpeg else 'ZIP' if options.zip else None
-        msg(f"Image encoding started, format = {img.format}, compress = {compressionFormat or 'ZIP'}")
-        image_obj_new,_ = PdfImage.encode(img,
-                                            compressionFormat = compressionFormat,
-                                            compressedQuality = options.quality)
-        msg('Image encoding ended')
-
-        # If applyColorSpace == False, put ColorSpace, Decode & masks back in
-        if not applyColorSpace:
-            if img.mode != 'CMYK' or img.format != 'JPEG': image_obj_new.Decode = image_obj.Decode
-            image_obj_new.ColorSpace = image_obj.ColorSpace
-            image_obj_new.Mask, image_obj_new.SMask = obj_masks
-            image_obj_new.Intent = image_obj.Intent
-            image_obj_new.Interpolate = image_obj.Interpolate
-
-        
-        # Preserve /Intent
-        image_obj_new.Intent = image_obj.Intent # What should the intent be after intent has already been applied?
-
-        # Preserve /ImageMask
-        image_obj_new.ImageMask = image_obj.ImageMask
-
-        # Calculate the before/after sizes and decide if we want to go ahead with the compression
-        size_old, size_new = PdfImage.size(image_obj), PdfImage.size(image_obj_new)
-        msg(print_size_change(size_old, size_new))
-        if not (size_new * 10 < size_old * 9) \
-            and not options.bicubic and not options.upsample and not options.colorspace and not options.zip:
-                msg('Skipping') ; return
-
-        # Copy the the result
-        image_obj.clear()
-        for k,v in image_obj_new.items():
-            image_obj[k] = v
-        image_obj.stream = image_obj_new.stream
-
-# ========================================================================== class ImageUtils
-
-class ImageUtils:
-
-    def PIL_image_to_PNG_IDAT_chunk(image:Image):
         '''
-        Returns a PDF image xobject stream encoded PNG filters (predictors) & ZLIB compression.
+        # obj_to.clear()
+        for k,v in obj_from.items():
+            obj_to[k] = v
+        obj_to.stream = obj_from.stream
+
+
+    # -------------------------------------------------------------------------------------- xobject_copy()
+
+    @staticmethod
+    def xobject_make_transparency_group_graphics_state(obj:IndirectPdfDict):
         '''
-
-        idatChunks = []
-        bs = BytesIO()
-        image.save(bs, format="PNG", optimize = True)
-        bs.seek(0)
-        bs.read(8)
-
-        while True:
-            length = struct.unpack(b'!L', bs.read(4))[0]
-            type = bs.read(4)
-            data = bs.read(length)
-            crc  = struct.unpack(b'!L', bs.read(4))[0]
-            if crc != zlib.crc32(type + data): warn(f'crc error in chunk: {type}'); return None
-            if type == b'IDAT': idatChunks.append(data)
-            if type == b'IHDR':
-                assert length == 13
-                width, height, bpc, color_type, compression, filter, interlace = struct.unpack(b'!LLBBBBB', data)
-                assert (width, height) == image.size
-                assert bpc == 8
-                assert color_type in [0, 2] # image.mode == 'RGB' or 'L'
-                assert interlace == 0
-            if type == b'IEND': break
-
-        if len(idatChunks) == 0: warn(f'no IDAT chunks in PNG') ; return None
-        return b''.join(chunk for chunk in idatChunks)
-
-    def PIL_image_to_PDF_stream_with_TIFF_codecs(image:Image, compression = 'group4'):
+        Make an extended graphics state with the image obj used as a source of the transparency
+        alpha. Use it like this:
+        ```
+        GS1 = PdfImage.xobject_make_transparency_group_graphics_state(obj)
+        xobject.Resources.ExtGState = PdfDict(GS1 = GS1)
+        xobject.stream += 'q /GS1 gs [graphics operators] Q'
+        ```
         '''
-        Returns a PDF image xobject stream encoded using one of TIFF's codecs: 'group4' or 'tiff_lzw'.
+        return  PdfDict(
+                    Type = PdfName.ExtGState,
+                    BM = PdfName.Multiply,
+                    CA = 1, ca = 1,
+                    SMask = PdfDict(
+                        BC = [0,0,0], # Backdrop color (black)
+                        S = PdfName.Luminosity, # source of mask's alpha
+                        # S = PdfName.Alpha, # source of mask's alpha
+
+                        # Transparency group XObject to be used as mask
+                        G = IndirectPdfDict(
+                            Type = PdfName.XObject,
+                            Subtype = PdfName.Form,
+                            BBox = [0,0,1,1],
+                            Group = IndirectPdfDict(
+                                CS = PdfName.DeviceRGB,
+                                I = PdfObject('true'), # Isolated, i.e. mask's background is transparent
+                                K = PdfObject('false'), # Knockout is false, see PDF Ref
+                                S = PdfName.Transparency
+                            ),
+                            Resources = PdfDict(XObject = PdfDict(mask = obj)),
+                            stream = '/mask Do\n'
+                        )
+                    )
+                )
+
+    # -------------------------------------------------------------------------------------- _jbig2_read()
+
+    @staticmethod
+    def _jbig2_read(jbig2:tuple[bytes, bytes]):
         '''
-        if compression not in ['group4', 'tiff_lzw']:
-            raise ValueError(f'unsupported compression method: {compression}')
-
-        if compression == 'group4' and image.mode != '1':
-            raise ValueError(f'cannot use group4 compression with image.mode: {image.mode}')
-        
-        if compression == 'tiff_lzw' and image.mode != 'RGB':
-            raise ValueError(f'cannot use LZW compression with image.mode: {image.mode}')
-
-        # Make sure Pillow produces single-strip TIFF; this works with Pillow versions < 8.3.0 or >=8.4.0  
-        # See: https://github.com/python-pillow/Pillow/pull/5744
-        # For Pillow versions from 8.3.0 to 8.3.9 see:
-        # https://gitlab.mister-muffin.de/josch/img2pdf/commit/6eec05c11c7e1cb2f2ea21aa502ebd5f88c5828b
-        # https://gitlab.mister-muffin.de/josch/img2pdf/issues/46
-
-        TiffImagePlugin.STRIP_SIZE = 2 ** 31
-
-        with BytesIO() as bs:
-            image.save(bs, format="TIFF", compression=compression)
-            bs.seek(0)
-            img = Image.open(bs)
-
-            # Read the TIFF tags to find the offset(s) and length of the compressed data strips.
-            strip_offsets = img.tag_v2[TiffImagePlugin.STRIPOFFSETS]
-            strip_bytes = img.tag_v2[TiffImagePlugin.STRIPBYTECOUNTS]
-            rows_per_strip = img.tag_v2.get(TiffImagePlugin.ROWSPERSTRIP, 2 ** 32 - 1)
-            if len(strip_offsets) != 1 or len(strip_bytes) != 1:
-                err("Expected a single strip")
-            (offset,), (length,) = strip_offsets, strip_bytes
-
-            bs.seek(offset)
-            stream = bs.read(length)
-
-        return stream
-
-    def PDF_stream_to_PIL_TIFF(width:int, height:int, bpc:int, cpp:int,
-                               tiff_compression:int, tiff_photometric:int, stream:bytes,
-                               encodedByteAlign = False,
-                               predictor = 1
-                               ):
-        '''Wraps /CCITTFaxDecode PDF stream in the TIFF format and creates a PIL image out of it.
+        Returns a PIL image
         '''
+        loc, glob = jbig2
+        with tempfile.TemporaryDirectory() as tmp:
+            T = lambda fileName: os.path.join(tmp, fileName)
+ 
+            open(T('locals'),'wb').write(loc) 
+            if glob:
+                open(T('globals'),'wb').write(glob)
+                OS.execute(['jbig2dec', '-e', '-o', T('out.png'), T('globals'), T('locals')])
+            else:
+                OS.execute(['jbig2dec', '-e', '-o', T('out.png'), T('locals')])
+            
+            return Image.open(T('out.png'))
+
+        # If you have to re-assemble the JBIG2 file for some reason, just add the header:
+        # 1-page, sequential order; see JBIG2 Specs
+        # header = b'\x97\x4A\x42\x32\x0D\x0A\x1A\x0A\x01\x00\x00\x00\x01'
+
+    # -------------------------------------------------------------------------------------- _jp2_read()
+
+    @staticmethod
+    def _jp2_read(jp2:bytes):
+        '''
+        Reads a JPEG2000 file (a bytes object) and returns a tuple (numpyArray, colorSpace, bitsPerComponent).
+        '''
+        with tempfile.TemporaryDirectory() as tmp:
+            T = lambda fileName: os.path.join(tmp, fileName)
+
+            open(T('temp.jp2'),'wb').write(jp2)
+            jp2k = Jp2k(T('temp.jp2'))          # call print(jp2k) to inspect the boxes
+
+            # Get the data
+            # print(jp2k)
+            try: bpc = int(jp2k.box[2].box[0].bits_per_component)
+            except: bpc = int(jp2k.box[3].box[0].bits_per_component)
+
+            data = jp2k[:] # This parses all JPEG2000 image slices for a full resolution image
+            if bpc == 1: data = data.astype(bool)
+            elif bpc <= 8: data = data.astype('uint8')
+            else: raise ValueError(f'unsupported JPEG2000 bit depth: {bpc}')
+            data = SImage.normalize(data)
+            SImage.validate(data)
+
+            # Get the colorspace
+            try: EnumCS = jp2k.box[2].box[1].colorspace
+            except: EnumCS = jp2k.box[3].box[1].colorspace
+
+            if EnumCS != None:
+                cs_name = {12:'CMYK', 16:'RGB', 17:'Gray', 18:'YCC', 20:'e-sRGB', 21:'ROMM-RGB'}.get(EnumCS)
+                if cs_name in [None, 'YCC', 'e-sRGB', 'ROMM-RGB']:
+                    raise ValueError(f'unsupported JPX colorspace: {cs_name}')
+                cs = PdfName('Device' + cs_name)
+            else:
+                icc_profile = jp2k.box[3].box[1].icc_profile
+                cs = PdfColorSpace.make_icc_based_colorspace(icc_profile, N = SImage.nColors(data))
+
+        return data, cs, bpc
+
+    # -------------------------------------------------------------------------------------- _jp2_write()
+
+    @staticmethod
+    def _jp2_write(array:np.ndarray, alpha:np.ndarray, cs:CS_TYPE, Q:int, CR:float):
+        '''
+        Encode array as a JPEG2000 image.
+        '''
+        assert CR or Q
+        CR = int(round(CR)) if CR != None else int(round(2 ** ((100 - Q)/10.0)))
+        cpp = PdfColorSpace.get_cpp(cs)
+        if cpp not in [1,3]:
+            raise ValueError(f'Jp2k: cpp = {cpp} not supported (must be 1 or 3)')
+        with tempfile.TemporaryDirectory() as tmp:
+            T = lambda fileName: os.path.join(tmp, fileName)
+            # can also try: cratios=[CR*4, CR*2, CR]
+            Jp2k(T('encoded.jp2'), array, colorspace='RGB' if cpp == 3 else 'Gray', cratios=[CR])
+            
+            return open(T('encoded.jp2'), 'rb').read()
+
+    # -------------------------------------------------------------------------------------- _tiff_make_header()
+
+    @staticmethod
+    def _tiff_make_header(obj:PdfDict):
+        '''
+        Make a TIFF header.
+
+        The CCITTFaxDecode -encoded stream is essentially a TIFF file without the header, so
+        this function reconstructs the missing TIFF file header.
+        '''
+        assert obj.Subtype in ['/Image', PdfName.Image] and obj.Filter == '/CCITTFaxDecode'
+ 
+        # ------------------------------------------------------------------ Get info
+
+        parm = obj.DecodeParms
+        width, height = int(obj.Width), int(obj.Height)
+        length = int(obj.Length)
+
+        K = get_key(parm, '/K', '0')
+        tiff_compression = 3 if int(K) >= 0 else 4
+
+        BlackIs1 = get_key(parm, '/BlackIs1', 'false')
+        # tiff_photometric = 0 if BlackIs1 == 'true' else 1
+        tiff_photometric = 1 if BlackIs1 == 'true' else 0           # ??? Why is this backwards ???
+        # if obj.ImageMask == PdfObject('true'): tiff_photometric = 1 - tiff_photometric
+
+        bpc = 1
+        cpp = 1
+
+        predictor = 1
+
+        encodedByteAlign = get_key(parm, '/EncodedByteAlign') == 'true'
         if encodedByteAlign:
             warn(f'*** /EncodedByteAlign == true, this is in beta-testing, check results ***')
-            assert tiff_compression == 3 # encodedByteAlign only possible with Group 3 compression
+            if tiff_compression != 3:
+                raise ValueError(f'/EncodedByteAlign == true is not supported for /CCITTFaxDecode Group4 (T6) compression')
+
         tiff_header_struct = '<' + '2s' + 'H' + 'L' + 'H' + 'HHLL' * 11 + 'L'
         tiff_header = struct.pack(tiff_header_struct,
                         b'II',  # Byte order indication: Little indian
@@ -1233,164 +1348,386 @@ class ImageUtils:
                         273, 4, 1, struct.calcsize(tiff_header_struct),  # StripOffsets, LONG, 1, len of header
                         277, 3, 1, cpp,  # SamplesPerPixel, LONG, 1, component per pixel (cpp)
                         278, 4, 1, height,  # RowsPerStrip, LONG, 1, height
-                        279, 4, 1, len(stream),  # StripByteCounts, LONG, 1, size of image
+                        279, 4, 1, length,  # StripByteCounts, LONG, 1, size of image
                         292, 4, 1, 4 if encodedByteAlign else 0,  # TIFFTAG_GROUP3OPTIONS, LONG, 1, 0..7 (flags)
                         317, 3, 1, predictor,  # Predictor, SHORT, 1, predictor = 1 (no prediction) or 2 (=left)
                         0  # --- IFD ends here; offset of the next IFD, 4 0-bytes b/c no next IFD
                         )
-        return Image.open(BytesIO(tiff_header + stream))
+        return tiff_header
 
+    # -------------------------------------------------------------------------------------- _tiff_write()
 
-    def pil_image_to_jpeg(img:Image, jpegQuality=95):
-        '''Converts any PIL image to a JPEG-compressed PIL image with the given quality. Any transparency, if present, is lost.
-        '''
-        # if img.mode in ['LA','1']: img = img.convert('L')
-        # if img.mode in ['RGBA','P']: img = img.convert('RGB')
-        icc_profile = img.info.get('icc_profile')
+    @staticmethod
+    def _tiff_write(pil:Image.Image):
+
+        # Make sure Pillow produces single-strip TIFF; this works with Pillow versions < 8.3.0 or >=8.4.0  
+        # See: https://github.com/python-pillow/Pillow/pull/5744
+        # For Pillow versions from 8.3.0 to 8.3.9 see:
+        # https://gitlab.mister-muffin.de/josch/img2pdf/commit/6eec05c11c7e1cb2f2ea21aa502ebd5f88c5828b
+        # https://gitlab.mister-muffin.de/josch/img2pdf/issues/46
+        TiffImagePlugin.STRIP_SIZE = 2 ** 31
+
         bs = BytesIO()
-        img.save(bs, format='JPEG', quality=jpegQuality)
-        bs.seek(0)
-        img_new = Image.open(bs)
-        img_new.info['icc_profile'] = icc_profile
-        return img_new
+        pil.save(bs, format="TIFF", compression='group4' if pil.mode == '1' else 'tiff_lzw')
+        # pil.save(bs, format="TIFF", compression='group4' if pil.mode == '1' else 'tiff_adobe_deflate')
 
-    def pil_image_invert_cmyk_colors_if_needed(image:Image):
-        '''CMYK (more precisely, YCCK) images are stored inverted in PDF if JPEG's adobe_transform tag is 2.
-        This function checks the tag and inverts the image back if necessary.
+        return bs.getvalue()
+    
+    # -------------------------------------------------------------------------------------- _tiff_get_strip()
+
+    @staticmethod
+    def _tiff_get_strip(tiff:bytes):
         '''
-        if image.mode == 'CMYK' and get_any_key(image.info, 'adobe_transform') == 2:
-            msg("Fixing Adobe CMYK")
-            image = ImageChops.invert(image)
-        return image
-
-    def pil_image_to_srgb(image:Image, intent = None):
-        '''The correct way to convert CMYK to RGB using ImageCms.profileToProfile().
-        The intent argument is the rendering intent. It can be one of:
-
-        * '/Perceptual'
-        * '/RelativeColorimetric'
-        * '/Saturation'
-        * '/AbsoluteColorimetric'.
-
-        If it is None then '/Perceptual' is used.
+        Returns the body of a single-strip TIFF file
         '''
-        intents = {'/Perceptual': ImageCms.Intent.PERCEPTUAL,
-                   '/RelativeColorimetric': ImageCms.Intent.RELATIVE_COLORIMETRIC,
-                   '/Saturation': ImageCms.Intent.SATURATION,
-                   '/AbsoluteColorimetric': ImageCms.Intent.ABSOLUTE_COLORIMETRIC }
-        renderingIntent = intents.get(intent, ImageCms.Intent.PERCEPTUAL)
+
+        bs = BytesIO(tiff)
+        img = Image.open(bs)
+
+        # Read the TIFF tags to find the offset(s) and length of the compressed data strips.
+        strip_offsets = img.tag_v2[TiffImagePlugin.STRIPOFFSETS]
+        strip_bytes = img.tag_v2[TiffImagePlugin.STRIPBYTECOUNTS]
+        rows_per_strip = img.tag_v2.get(TiffImagePlugin.ROWSPERSTRIP, 2 ** 32 - 1)
+        if len(strip_offsets) != 1 or len(strip_bytes) != 1:
+            raise ValueError("Expected a single strip")
+        (offset,), (length,) = strip_offsets, strip_bytes
+
+        bs.seek(offset)
+        return bs.read(length)
+
+    # -------------------------------------------------------------------------------------- _png_get_stream_and_filter()
+
+    @staticmethod
+    def _png_get_stream_and_filter(png:bytes):
+        '''
+        Returns a tuple (IDAT_chunk, pngFilter), where pngFilter == 10..15 is the PNG prediction filter.
+        '''
+
+        png = BytesIO(png)
+        idatChunks = []
+        png.seek(0)
+        png.read(8)
+
+        while True:
+            length = struct.unpack(b'!L', png.read(4))[0]
+            type = png.read(4)
+            data = png.read(length)
+            crc  = struct.unpack(b'!L', png.read(4))[0]
+            if crc != zlib.crc32(type + data): warn(f'crc error in chunk: {type}'); return None
+            if type == b'IDAT': idatChunks.append(data)
+            if type == b'IHDR':
+                assert length == 13
+                width, height, bpc, color_type, compression, pngFilter, interlace = struct.unpack(b'!LLBBBBB', data)
+                assert (width, height) == image.size
+                assert bpc == 8
+                assert color_type in [0, 2] # image.mode == 'RGB' or 'L'
+                assert interlace == 0
+                assert 10 <= pngFilter <= 15
+            if type == b'IEND': break
+
+        if len(idatChunks) == 0: warn(f'no IDAT chunks in PNG') ; return None
+        return b''.join(chunk for chunk in idatChunks), pngFilter
+
+    # -------------------------------------------------------------------------------------- _pil_get_colorspace()
+
+    @staticmethod
+    def _pil_get_colorspace(image:Image.Image):
+        '''
+        '''
+        mode2cpp = {'L':1, 'RGB':3, 'CMYK':4}
+        mode2cs = {'1':PdfName.DeviceGray, 'L':PdfName.DeviceGray, 'RGB':PdfName.DeviceRGB, 'CMYK':PdfName.DeviceCMYK}
+
+        assert image.mode != 'PA' # reduce 'PA' modes before calling this function
+        mode = image.mode if image.mode[-1] != 'A' else image.mode[:-1]
+
+        cs = None
+
+        if mode == 'P':
+            # palette = image.getpalette()
+            # if palette == None: return None
+            # palette = b''.join(v.to_bytes(1,'big') for v in image.getpalette())
+
+            palette_bytes = image.palette.getdata()[1]
+            palette_mode = image.palette.mode
+            assert palette_mode in mode2cpp
+
+            cpp = mode2cpp.get(palette_mode)
+            assert len(palette_bytes) % cpp == 0
+
+            base = mode2cs.get(palette_mode)
+            hival = len(palette_bytes) // cpp - 1
+            assert hival <= 255
+            palette_xobj = IndirectPdfDict(Filter = PdfName.FlateDecode,
+                                            stream = zlib.compress(palette_bytes).decode('Latin-1'))
+            cs = PdfArray([PdfName.Indexed, base, hival, palette_xobj])
+
         icc_profile = image.info.get('icc_profile')
-        if icc_profile == None and image.mode == 'CMYK':
-            icc_profile = CMYK_DEFAULT_ICC_PROFILE
-        if icc_profile != None:
-            inputProfile = ImageCms.ImageCmsProfile(BytesIO(icc_profile))
-            outputProfile = ImageCms.createProfile("sRGB")
-            return ImageCms.profileToProfile(image, inputProfile, outputProfile, renderingIntent = renderingIntent, outputMode="RGB")
+        if icc_profile:
+            if mode == 'P':
+                cs[1] = PdfColorSpace.make_icc_based_colorspace(icc_profile, N = cpp)
+            else:
+                cpp = mode2cpp.get(mode)
+                cs = PdfColorSpace.make_icc_based_colorspace(icc_profile, N = cpp)
+
+        if not cs:
+            cs = mode2cs[mode]
+
+        return cs
+
+    # -------------------------------------------------------------------------------------- _pil_set_colorspace()
+
+    @staticmethod
+    def _pil_set_colorspace(image:Image.Image, cs:CS_TYPE = None):
+        '''
+        '''
+        if cs == None:
+            del image.palette
+            del image.info['icc_profile']
         else:
-            warn('low quality conversion to RGB')
-            return image.convert('RGB')
+            # Palette
+            palette_cs, palette_array = PdfColorSpace.get_palette(cs)
+            if palette_cs != None:
+                palette_mode = PdfColorSpace.get_mode(palette_cs, 8)
+                assert palette_mode == 'RGB'
+                assert palette_array.shape[-1] == 3
+                image.putpalette(palette_array.tobytes(), rawmode='RGB')
+
+            # ICC Profile
+            if icc_profile := PdfColorSpace.get_icc_profile(cs):
+                image.info['icc_profile'] = icc_profile
+
+    # -------------------------------------------------------------------------------------- _pil_split_alpha()
+
+    @staticmethod
+    def _pil_split_alpha(image:Image.Image):
+        '''
+        Returns a tuple (base, alpha) if the PIL image contains an alpha channel (i.e., if its mode
+        is PA, LA or RGBA), or a tuple (pil, None) otherwise.
+        '''
+        alpha = None
+
+        if image.mode == 'PA':
+
+            icc_before = image.info.get('icc_profile')
+            image = image.convert('RGBA')
+            assert icc_before == image.info.get('icc_profile')
+
+        if image.mode in ['LA', 'RGBA']:
+
+            icc_profile = image.info.get('icc_profile')
+            if image.mode == 'LA':
+                image, alpha = image.split()
+            if image.mode == 'RGBA':
+                r, g, b, alpha = image.split()
+                image = Image.merge('RGB',(r,g,b))
+            del alpha.info['icc_profile']
+            if icc_profile:
+                image.info['icc_profile'] = icc_profile
+
+        return image, alpha
 
 # ============================================================================= jbig2_compress()
 
-def jbig2_compress(bitonal_images:dict):
+def jbig2_compress(bitonal_images:dict, cpc:bool = False):
     '''
     Compress bitonal images with the JBIG2 codec
     '''
-    msg(f'processing {len(bitonal_images)} bitonal images')
+    if len(bitonal_images) == 0: warn('no images to compress') ; return
+    msg('started')
 
-    # Prepare the tmpDir
-    tmpDir = '_jbig2'
-    if not os.path.isdir(tmpDir):
-        os.makedirs(tmpDir)
-    os.chdir(tmpDir)
+    def RUN(cmdList:list):
+        if not isinstance(cmdList, list): sys.exit(f'bad cmdList: {cmdList}')
+        result = subprocess.run(cmdList, capture_output=True)
+        if result.returncode:
+            print(f'ERROR: command failed: {cmdList}')
+            print(result.stdout.decode('utf-8'))
+            print(result.stderr.decode('utf-8'))
+            sys.exit(1)
 
-    images = list(bitonal_images.values())
-    # Dump images to tmpDir
-    tif_names = []
-    for n, image in enumerate(images):
-        pil_image, encoded = PdfImage.decode(image)
-        if pil_image == None:
-            sys.exit(f'failed to decode image: {image}')
-        tif_name = f'{n:04d}.tif'
-        pil_image.save(tif_name)
-        tif_names.append(tif_name)
+    def intToPrefix(i:int):
+        s = ''
+        for _ in range(3):
+            s = chr(ord('a') + i % 26) + s
+            i = i // 26
+        return s
 
-    result = subprocess.run(['jbig2', '-p', '-s', '-t', '0.97999'] + tif_names, capture_output=True)
-    if result.returncode:
-        print('ERROR: running jbig2 encoder failed:')
-        print(result.stdout.decode('utf-8'))
-        print(result.stderr.decode('utf-8'))
-        sys.exit(1)
 
-    try:
-        globals = IndirectPdfDict(stream = py23_diffs.convert_load(open('output.sym','rb').read()))
-    except:
-        globals = None
-    for n, image in enumerate(images):
-        image.Filter = PdfName.JBIG2Decode
-        image.DecodeParms = PdfDict(JBIG2Globals = globals) if globals else None
-        image.stream = py23_diffs.convert_load(open(f'output.{n:04d}','rb').read())
+    with tempfile.TemporaryDirectory() as tmp:
+        T = lambda fileName: os.path.join(tmp, fileName)
 
-    os.chdir('..')
+        image_objects = list(bitonal_images.values())
 
-    import shutil
-    shutil.rmtree('_jbig2')
+        # Dump images to tmpDir
+        tif_paths = []
+        msg(f'decoding and extracting {len(bitonal_images)} bitonal images')
+        for n, obj in enumerate(image_objects):
+            pprint(obj)
+            image = PdfImage(obj = obj)
+            array = image.get_array()
+            if np.mean(array) < 0.5:
+                image.set_array(np.logical_not(array))
+                decode = [int(x) for x in obj.Decode] if obj.Decode != None else None
+                obj.Decode = None if decode == [1,0] else PdfArray(['1','0'])
+                image.Decode = obj.Decode
+            tif_stream, _ = image.saveAs('TIFF')
+            tif_path = T(f'in-{n:04d}.tif')
+            open(tif_path, 'wb').write(tif_stream)
+            tif_paths.append(tif_path)
+
+        if cpc:
+            cpcCmd = ['wine', '/Users/user/Code/Win/CPCTool-530-Win32-X86_regged.exe']
+            msg(f'compressing {len(tif_paths)} bitonal images with CPCTool')
+            RUN(cpcCmd + tif_paths +['-o', T('cpc.cpc')])
+            RUN(cpcCmd + [T('cpc.cpc'), '-o', T('cpc.tif')])
+            RUN(['tiffsplit', T('cpc.tif'), T('split-')])
+
+            for i, name in enumerate(tif_paths):
+                shutil.move(T('split-') + intToPrefix(i) + '.tif', name)
+
+        msg(f'compressing {len(tif_paths)} bitonal images with JBIG2')
+        RUN(['jbig2', '-p', '-s', '-t', '0.97999', '-b', T('result')] + tif_paths)
+
+        try:
+            globals = IndirectPdfDict(stream = py23_diffs.convert_load(open(T('result.sym'),'rb').read()))
+        except:
+            globals = None
+        for n, obj in enumerate(image_objects):
+            obj.Filter = PdfName.JBIG2Decode
+            obj.DecodeParms = PdfDict(JBIG2Globals = globals) if globals else None
+            obj.stream = py23_diffs.convert_load(open(T(f'result.{n:04d}'),'rb').read())
+
+    msg('ended')
+
+# ============================================================================= modify_image_xobject()
+
+def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:PdfDict):
+    '''
+    This function performs in-place modifications of an image object, such as: JPEG/JPEG2000
+    compression, resizing/upsampling, color space conversions.
+    '''
+
+    # # Fix predictors
+    # if options.predictors:
+    #     msg('Checking images PNG predictors')
+    #     _ = PdfFilter.uncompress(image_obj)
+    #     if mask != None:
+    #         msg('Checking mask PNG predictors')
+    #         _ = PdfFilter.uncompress(mask)
+
+    image = PdfImage(obj = image_obj)
+
+    intent = image_obj.Intent if options.intent == 'native' else options.intent
+
+    modified = False
+
+    if image.bpc == 1:
+
+        if options.despeckle:
+            msg(f'despeckling, threshold = {options.despeckle}')
+            image.set_array(SImage.despeckle(image.get_array(), threshold = options.despeckle))
+            modified = True
+
+    else:
+
+        if options.auto:
+            image.render(pdfPage = pdfPage)
+            gray = SImage.toGray(image.get_array())
+            if np.all(np.logical_or(gray == 0, gray == 255)):
+                msg('auto-thresholding')
+                image = PdfImage(array = gray > 127)
+                modified = True
+
+        if options.colorspace:
+            image.render(pdfPage = pdfPage)
+            mode = {'cmyk':'CMYK', 'rgb':'RGB', 'gray':'L', 'grey':'L'}.get(options.colorspace.lower())
+            msg(f'converting colorspace: {image.get_mode()} --> {mode}')
+            image.change_mode(mode, intent)
+            modified = True
+
+        if options.bitonal and image.get_mode() != '1':
+            image.render(pdfPage = pdfPage)
+            cs_name = PdfColorSpace.get_name(image.ColorSpace)
+            msg(f'converting {cs_name} --> 1')
+            image.change_mode('L', intent)
+            image = PdfImage(array = SImage.toBitonal(image.get_array(), threshold = options.threshold))
+            modified = True
+
+        if options.upsample:
+            if PdfColorSpace.get_name(image.ColorSpace) == '/Indexed':
+                image.render()
+            msg(f'upsampling: alpha = {options.alpha}, bounds = {options.bounds}')
+            image.set_array(SImage.superResolution(image.get_array(), alpha = options.alpha, bounds = options.bounds))
+            modified = True
+
+        if options.resample:
+            f = options.resample
+            if PdfColorSpace.get_name(image.ColorSpace) == '/Indexed':
+                image.render()
+            msg(f'resampling: factor = {f}, method = bicubic')
+            image.set_array(SImage.resize(image.get_array(), int(image.w() * f), int(image.h() * f)))
+            modified = True
+
+    if not modified: return
+    
+    obj = image.encode()
+
+    image_obj.Filter = obj.Filter
+    image_obj.stream = obj.stream
+    image_obj.ColorSpace = obj.ColorSpace
+    image_obj.BitsPerComponent = obj.BitsPerComponent
+    image_obj.DecodeParms = obj.DecodeParms
+    image_obj.Decode = obj.Decode
+    image_obj.Width = obj.Width
+    image_obj.Height = obj.Height
+
+    # print('obj:')
+    # print(obj)
+
+def getPageRange(s:str):
+    '''
+    Parses a page range string formatted as 'N1[,N2-N3[,..]]' and returns a list of the form: [N1, N2, N2+1, ... N3].
+    '''
+    interval = lambda i: i if len(i) == 1 else [n for n in range(i[0], i[1]+1)] if len(i) == 2 else []
+    return [n for r in re.split(',', options.pages) for n in interval([int(x) for x in re.split('-',r)]) ]
 
 # ============================================================================= main()
 
 if __name__ == '__main__':
 
-    helpMessage='''
-    pdfimage.py -- image library for pdfrw
-
-    Usage:
-    
-    1) Help: pdfimage.py [-h]
-
-    Images -> PDF:
-    pdfimage.py [-o=output.pdf] [-dpi=dpi] image1.png [image2.jpg ..]
-    
-    Output: output.pdf | image1.pdf
-
-    2) PDF -> images:
-    pdfimage.py file.pdf
-    
-    Output: file.img1.png, file.img2.jpg ...
-
-    3) PDF -> PDF (compression):
-    pdfimage.py [-jpeg[=Q(90)]|jbig2] file.pdf
-    
-    Output: file-[jpeg|jbig2].pdf
-    '''
-
     ap = argparse.ArgumentParser()
 
     ap.add_argument('inputPaths', nargs='+', metavar='FILE', help='input files: images or PDF')
     ap.add_argument('-output', '-o', type=str, metavar='PATH', help='output PDF file path')
-    ap.add_argument('-first', '-f', type=int, metavar='N', default=1, help='first pageNo to process (def = 1)')
-    ap.add_argument('-last', '-l', type=int, metavar='N', default=-1, help='last pageNo to process (def = last page)')
+    ap.add_argument('-pages', type=str, metavar='RANGE', help='process selected pages; RANGE = N1[,N2-N3[,..]]')
     ap.add_argument('-dpi', type=int, metavar='N', help='set resolution of input images to DPI')
 
-    ap.add_argument('-bitonal', action='store_true', help='convert color/gray images to bitonal')
-    ap.add_argument('-jbig2', action='store_true', help='compress bitonal images with JBIG2 (lossless)')
-    ap.add_argument('-dict', type=int, metavar='N', help='pages per JBIG2 symbol dictionary')
+    ap.add_argument('-bitonal', action='store_true', help='convert color/gray images to bitonal using Otsu\'s algorithm')
+    ap.add_argument('-auto', action='store_true', help='detect if gray/color images are in fact bitonal and convert them')
+    ap.add_argument('-threshold', type=int, metavar='T', default=0, help='threshold adjustment; T = -255..+255; def = 0')
 
-    ap.add_argument('-gray', action='store_true', help='convert color images to grayscale')
+    ap.add_argument('-jbig2', action='store_true', help='compress bitonal images with JBIG2 (lossless)')
+    ap.add_argument('-cpc', action='store_true', help='pre-process bitonal images with CPCTool before JBIG2 compression')
+    ap.add_argument('-despeckle', type=int, default=0, metavar='T', help='despeckle bitonal images; T = [-12..12]; def = 0')
+
+    ap.add_argument('-dict', type=int, default=20, metavar='N', help='pages per JBIG2 symbol dictionary; def = 20')
 
     ap.add_argument('-zip', action='store_true', help='compress color/gray images with JPEG')
     ap.add_argument('-jpeg', action='store_true', help='compress color/gray images with JPEG')
-    ap.add_argument('-quality', '-q', type=int, default=90, metavar='Q', help='JPEG compression quality; Q=0..100 (def=90)')
-    ap.add_argument('-colorspace', '-cs', type=str, metavar='S', choices=['rgb'], help='convert images to color space; S = rgb (def=rgb)')
+    ap.add_argument('-j2k', action='store_true', help='compress color/gray images with JPEG 2000')
+    ap.add_argument('-quality', '-q', type=int, default=90, metavar='Q', help='JPEG/JPEG 2000 compression quality; Q=0..100 (def=90)')
+    ap.add_argument('-colorspace', '-cs', type=str, metavar='S', choices=['gray', 'rgb', 'cmyk'], help='convert images to color space; S = gray|rgb|cmyk')
 
     ap.add_argument('-intent', type=str, metavar='I', choices = ['absolute', 'relative', 'perceptual', 'saturation', 'native', 'none'],
                     default = 'perceptual',
                     help='rendering intent; I = absolute|relative|perceptual|saturation|native|none (def=\'perceptual\')')
 
-    ap.add_argument('-bicubic', type=float, metavar='F', help='resample color/gray images with bicubic interpolation')
+    ap.add_argument('-resample', type=float, metavar='F', help='resample color/gray images with bicubic interpolation')
     ap.add_argument('-upsample', action='store_true', help='upsample color/gray images x2 using Bayesian algorithm')
     ap.add_argument('-predictors', action='store_true', help='fixes incorrect PNG predictor values in images\' DecodeParms dicts')
     ap.add_argument('-alpha', type=int, metavar='A', default=1, help='alpha for the upsampling algo, higher=sharper; A=1..10, def=1')
-    ap.add_argument('-bounds', type=str, metavar='B', default='local', choices=['softmax','local','none'], help='bounds for the upsampling algo, B=softmax|local|none, def=softmax')
+    ap.add_argument('-bounds', type=str, metavar='B', default='softmax', choices=['softmax','local','none'], help='bounds for the upsampling algo, B=softmax|local|none, def=softmax')
+
+    ap.add_argument('-descreen', type=float, metavar='C', help='descreen images; try confidence C = 3 (in units of stand. dev.)')
 
     options = ap.parse_args()
 
@@ -1415,14 +1752,15 @@ if __name__ == '__main__':
         pdf = PdfReader(options.inputPaths[0])
         N = len(pdf.pages)
         eprint(f"[PAGES]: {N}")
-        if options.last == -1: options.last = N
+
+        pageRange = getPageRange(options.pages) if options.pages else [n+1 for n in range(N)]
 
         # JBIG2 compression
         if options.jbig2:
             cache = set()
             bitonal_images = {}
             pageCount = 0
-            for pageNo in range(options.first, options.last+1):
+            for pageNo in pageRange:
                 print(f'[{pageNo}]')
                 page = pdf.pages[pageNo-1]
                 bitonal_images = bitonal_images | {id(obj):obj for name, obj in PdfObjects(page, cache=cache) 
@@ -1430,14 +1768,14 @@ if __name__ == '__main__':
                             and (obj.BitsPerComponent == '1' or obj.ImageMask == PdfObject('true'))}
                 pageCount += 1
                 if pageCount == options.dict:
-                    jbig2_compress(bitonal_images) 
+                    jbig2_compress(bitonal_images, cpc = options.cpc)
                     pageCount = 0
                     bitonal_images = {}
             
             if len(bitonal_images) > 0:
-                jbig2_compress(bitonal_images) 
+                jbig2_compress(bitonal_images, cpc = options.cpc)
 
-            pdfOutPath = fileBase + f'-jbig2' + fileExt
+            pdfOutPath = fileBase + ('-cpc' if options.cpc else '') + f'-jbig2' + fileExt
             print(LINE_DOUBLE)
             print(f'Writing output to {pdfOutPath}')
             PdfWriter(pdfOutPath, trailer=pdf, compress=True).write()
@@ -1446,16 +1784,23 @@ if __name__ == '__main__':
 
         # Iterate over pages
         cache = set()
-        for pageNo in range(options.first, options.last+1):
+
+        for pageNo in pageRange:
+
+            print('-'*60)
+            print(f'Processing page {pageNo}')
+            print('-'*60)
 
             page = pdf.pages[pageNo-1]
-            images = {id(obj):obj for name, obj in PdfObjects(page, cache=cache) 
+            images = {name+f'_{id(obj)}':obj for name, obj in PdfObjects(page, cache=cache) 
                         if isinstance(obj, PdfDict) and obj.Subtype == PdfName.Image 
                         and name not in [PdfName.Mask, PdfName.SMask]}
 
             # print(page)
             print(f'Page {pageNo}, read {len(images)} images')
-            print(f'Page.Resources.ColorSpace:', page.Resources.ColorSpace if page.Resources != None else None)
+            try: defaultColorSpaces = page.Resources.ColorSpace.keys()
+            except: defaultColorSpaces = None
+            print(f'Page.Resources.ColorSpace:', defaultColorSpaces)
             for n,idx in enumerate(images):
                 obj = images[idx]
                 print(LINE_SINGLE)
@@ -1464,62 +1809,62 @@ if __name__ == '__main__':
                 print(LINE_SINGLE)
 
                 # ---------- Modify images ----------
-                if options.zip or options.jpeg or options.upsample or options.bicubic or options.colorspace \
-                        or options.bitonal or options.predictors:
+                if options.zip or options.upsample or options.resample or options.colorspace \
+                        or options.bitonal or options.predictors \
+                        or options.despeckle \
+                        or options.auto:
+
                     pageArg = page if options.colorspace else None
-                    PdfImage.modify_image_xobject(obj, pageArg, options)
+                    modify_image_xobject(obj, pageArg, options)
                     print(LINE_SINGLE)
                     print("RESULT:")
                     pprint(obj)
+
+                # ---------- Recompress images ----------
+                elif options.jpeg:
+                    if PdfImage.xobject_get_bpc(obj) != 1:
+                        msg('recompressing image')
+                        PdfImage.recompress(obj, Format='JPEG', Q=options.quality)
+                        # if image_obj.SMask:
+                        #     msg('recompressing mask')
+                        #     PdfImage.recompress(image_obj.SMask, Format='JPEG', Q=options.quality)
+
+                # ---------- Descreen images ----------
+                elif options.descreen:
+                    if PdfImage.xobject_get_bpc(obj) != 1:
+                        msg('descreening image')
+                        image = PdfImage(obj = obj)
+                        image.set_array(SImage.descreen(image.get_array(), options.descreen))
+                        obj_new = image.encode()
+                        PdfImage.xobject_copy(obj_new, obj)
 
                 # ---------- Extract images ----------
                 else:
 
                     # image = PdfImage.decode(obj,page, adjustColors = False, applyMasks = True, applyIntent = options.applyIntent)
-                    image, encoded = PdfImage.decode(obj,page, invertCMYK = True,
-                                                        applyMasks = True, applyColorSpace = True, intent = options.intent)
-                    if image == None: warn('failed to extract image; continuing'); continue
-                    if encoded != None:
-                        format, stream = encoded
-                        if format == 'JPEG':
-                            ext = '.jpg'
-                        elif format == 'JPEG2000':
-                            ext = '.jp2'
-                        else:
-                            sys.exit(f'unknown encoded format {format}')
-                        outputPath = fileBase  +f'.page{pageNo}.image{n+1}' + ext
-                        print(f'Extracting original image stream --> {outputPath}')
-                        open(outputPath,'wb').write(stream)
-                        continue
-
-                    dpi = options.dpi if options.dpi != None else image.info.get('dpi') if image.info.get('dpi') != None else (72,72)
-                    icc_profile = image.info.get('icc_profile')
-
-                    # Save images
-                    formats = {'TIFF':'.tif', 'PNG':'.png', 'JPEG':'.jpg', 'JPEG2000':'.jp2'}
-                    print('Saving image.format:', image.format)
-                    ext = formats[image.format] if image.format in formats else '.tif'
-                    tiff_compression = 'group4' if image.mode == '1' else 'tiff_lzw'
+                    image = PdfImage(obj=obj)
+                    stream, ext = image.saveAs('auto', render = True)
                     outputPath = fileBase  +f'.page{pageNo}.image{n+1}' + ext
-                    print(f'Extracting --> {outputPath}')
-                    if image.format in ['PNG', 'JPEG', 'JPEG2000']:
-                        image.save(outputPath, dpi=dpi, icc_profile=icc_profile, quality='keep', info=image.info)
-                    else:
-                        image.save(outputPath, dpi=dpi, icc_profile=icc_profile, compression=tiff_compression)
+                    open(outputPath, 'wb').write(stream)
 
-        if options.zip or options.jpeg or options.upsample or options.bicubic or options.colorspace \
-                or options.bitonal or options.predictors:
+        if options.zip or options.jpeg or options.j2k or options.upsample or options.resample or options.colorspace \
+                or options.bitonal or options.predictors or options.descreen or options.despeckle or options.auto:
             suffix = ''
-            if options.upsample: suffix += f'-upsample-{options.alpha}'
-            if options.bicubic: suffix += '-bicubic'
+            if options.auto: suffix += f'-auto'
+            if options.despeckle: suffix += f'-despeckle={options.despeckle}'
+            if options.upsample: suffix += f'-upsample={options.alpha}'
+            if options.resample: suffix += '-resample'
             if options.colorspace: suffix += f'-{options.colorspace}'
             if options.zip: suffix += f'-zip'
-            if options.jpeg: suffix += f'-jpeg-{options.quality}'
+            if options.jpeg: suffix += f'-jpeg={options.quality}'
+            if options.j2k: suffix += f'-j2k={options.quality}'
             if options.bitonal: suffix += '-bitonal'
             if options.predictors: suffix += '-predictors'
+            if options.descreen: suffix += f'-descreen={options.descreen}'
             assert suffix != ''
             pdfOutPath = fileBase + suffix + fileExt
             print(LINE_DOUBLE)
+            if (options.j2k): print('Warning: *** JPEG 2000 output may be buggy; please check manually ***')
             print(f'Writing output to {pdfOutPath}')
             PdfWriter(pdfOutPath, trailer=pdf, compress=True).write()
 
@@ -1531,14 +1876,21 @@ if __name__ == '__main__':
         pdf = PdfWriter(pdfPath,compress=True)
         N = len(options.inputPaths)
         for n,imagePath in enumerate(options.inputPaths):
-            image = Image.open(imagePath)
-            dpi_orig = image.info.get('dpi')
-            print(f'[{n+1}/{N}] {image.size} {dpi_orig} {image.format} {image.mode} {imagePath}')
-            dpi = (options.dpi, options.dpi) if options.dpi != None else image.info.get('dpi') if image.info.get('dpi') != None else (72,72)
-            image.info['dpi'] = dpi
-            page, dpi_actual = PdfImage.pil_image_to_pdf_page(image)
+            base,ext = os.path.splitext(imagePath)
+            if ext.lower() == '.jp2':
+                image = PdfImage(jp2 = open(imagePath,'rb').read())
+            else:
+                image = PdfImage(pil = Image.open(imagePath))
+
+            print(f'[{n+1}/{N}] {image}')
+            print(f'[{n+1}/{N}] {imagePath}')
+
+            image.dpi = (options.dpi, options.dpi) if options.dpi != None \
+                    else image.dpi if image.dpi not in [None, (1,1)] \
+                    else (72,72)
+
+            page = image.to_pdf_page()
             pdf.addPage(page)
-            print(f'[{n+1}/{N}] {image.mode} {image.size} @ {dpi_actual} dpi')
 
         pdf.write()
         print(f'Output written to {pdfPath}')

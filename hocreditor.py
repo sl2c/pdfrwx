@@ -10,19 +10,18 @@ from typing import Callable
 # Try using: github.com/sarnold/pdfrw as it contains many fixes compared to pmaupin's version
 from pdfrw import PdfReader, PdfWriter, PdfArray, PdfDict, IndirectPdfDict, PdfName
 
-from pdfrwx.common import err,msg,warn,eprint, encapsulate
-from pdfrwx.pdffont import PdfFont, PdfFontUtils, PdfTextString
-from pdfrwx.pdffontencoding import PdfFontEncoding
-from pdfrwx.pdfstreamparser import PdfStream
-from pdfrwx.djvusedparser import DjVuSedLexer, DjVuSedParser
-from pdfrwx.pdfstate import PdfState
-from pdfrwx.pdffontglyphmap import PdfFontGlyphMap
-from pdfrwx.pdffilter import PdfFilter
+from .common import err,msg,warn,eprint, encapsulate
+from .pdffont import PdfFont, PdfTextString
+from .pdffontencoding import PdfFontEncoding
+from .pdfstreamparser import PdfStream
+from .djvusedparser import DjVuSedLexer, DjVuSedParser
+from .pdfstate import PdfState
+from .pdffontglyphmap import PdfFontGlyphMap
+from .pdffilter import PdfFilter
 
 import xml.etree.ElementTree as ET # for parsing hOCR files
 
 
-from pdfrwx.common import err,warn,eprint
 
 # ========================================================================== class hocrEditor
 

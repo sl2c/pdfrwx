@@ -5,10 +5,10 @@ from pprint import pprint
 
 from pdfrw import PdfDict, PdfName, PdfArray
 
-from pdfrwx.common import err, msg, warn, chain
-from pdfrwx.pdffontencoding import PdfFontEncoding
-from pdfrwx.pdffontcmap import PdfFontCMap
-from pdfrwx.pdfobjects import PdfObjects
+from .common import err, msg, warn, chain
+from .pdffontencoding import PdfFontEncoding
+from .pdffontcmap import PdfFontCMap
+from .pdfobjects import PdfObjects
 
 # =========================================================================== class PdfFontGlyphMap
 
@@ -26,7 +26,7 @@ class PdfFontGlyphMap:
     DEX=1 # Digital or hex, like '12'
     HEX=2 # Hex, but not decimal, like '1F'
 
-    def __init__(self, glyphListPaths:list[str] = [], fonts:PdfObjects = {}, knownPrefixes = {}):
+    def __init__(self, glyphListPaths:list[str] = [], fonts:dict = {}, knownPrefixes = {}):
         '''Initializes PdfFontGlyphMap by doing the following:
         
         * loads glyph map lists from the list of glyph list paths (1st argument)
@@ -58,8 +58,8 @@ class PdfFontGlyphMap:
                     self.glyphMap[PdfName(glyphName)] = PdfFontCMap.UTF16BE_to_Unicode_NEW(codePointHex)
 
         # train the composite_glyphname_to_cc() algo on glyph names from the fonts list
-        for font in [f for f in fonts.values() if f.Subtype != '/Type0']:
-            for gname in [g for g in PdfFontEncoding(font=font).glyphname2cc 
+        for font in [f for f in fonts.values() if f.font.Subtype != '/Type0']:
+            for gname in [g for g in font.encoding.glyphname2cc 
                             if PdfFontGlyphMap.strip_dot_endings(g) not in self.glyphMap]:
                 self.composite_glyphname_to_unicode(gname)
 
@@ -79,7 +79,7 @@ class PdfFontGlyphMap:
         '''
         suffix_type = lambda suffix: self.DEX if all(c in string.digits for c in suffix) else self.HEX
 
-        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|Char|char|glyph|MT|\\rm|.*\.g)([0-9a-fA-F]+)$',r'\1|||\2',gname)
+        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|Char|char|glyph|MT|.*\.g)([0-9a-fA-F]+)$',r'\1|||\2',gname)
         gname_split = re.split(r'\|\|\|',gname_marked)
         prefix,suffix = gname_split if len(gname_split) == 2 else (None,None)
         if prefix == None: return None
@@ -94,7 +94,7 @@ class PdfFontGlyphMap:
 
     # --------------------------------------------------------------------------- make_cmap()
 
-    def make_cmap(self, encoding:PdfFontEncoding, mapComposites = True):
+    def make_cmap(self, encoding:PdfFontEncoding, mapComposites = True, quiet:bool = False):
         '''
         Create an instance of PdfFontCMap from an instance of PdfFontEncoding by attempting to map
         glyph names to Unicode points.
@@ -127,12 +127,12 @@ class PdfFontGlyphMap:
                 unrecognized[ord(cc)] = gname
 
         cmap.reset_unicode2cc()
-        if len(unrecognized) > 0:
+        if len(unrecognized) > 0 and not quiet:
             u = ' '.join(unrecognized.values())
             warn(f'unrecognized glyph names: {u}')
         return cmap
 
-    def gname_to_unicode(self, gname, stdGlyphMap = {}, isType3 = False, mapComposites = True):
+    def gname_to_unicode(self, gname, stdGlyphMap:dict = {}, isType3 = False, mapComposites = True):
         '''
         Convert glyph name to Unicode
         '''
@@ -159,6 +159,7 @@ class PdfFontGlyphMap:
         if unicode == None:
 
             g = PdfFontGlyphMap.strip_dot_endings(gname)
+            g = PdfFontGlyphMap.strip_prefixes(g)
             unicode = self.glyphMap.get(g) or stdGlyphMap.get(g) # Check external glyph map first
 
             if unicode == None and mapComposites:
@@ -199,9 +200,17 @@ class PdfFontGlyphMap:
     def strip_dot_endings(s:str):
         '''Strips ._, .sc & .cap endings from a string; useful to match variants (small caps etc) of glyph names in glyph lists
         '''
-        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|disp|big|ts1|lf))+$','',s)
+        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|disp|big|ts1|lf))+$','', s)
+        s1 = re.sub(r'\\rm', '', s1)
         return s1 if len(s1)>1 else s
 
+    # --------------------------------------------------------------------------- strip_prefixes()
+
+    def strip_prefixes(s:str):
+        '''Strips \\rm and the like from the beginning of the glyph name
+        '''
+        s1 = re.sub(r'(\\rm|\\mathchardef)', '', s)
+        return s1 if len(s1)>1 else s
 
 
 # =========================================================================== class PdfFontGlyphMapStandards
