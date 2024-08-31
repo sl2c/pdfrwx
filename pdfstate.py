@@ -108,7 +108,10 @@ class PdfState:
             if fontId in self.__fontCache:
                 cs.font = self.__fontCache[fontId]
             else:
-                cs.font = PdfFont(font = cs.font, glyphMap = self.glyphMap)
+                cs.font = PdfFont(font = cs.font,
+                                    glyphMap = self.glyphMap,
+                                    extractFontProgram = False,
+                                    makeSyntheticCmap = False)
                 self.__fontCache[fontId] = cs.font
  
         # Text commands

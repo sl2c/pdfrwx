@@ -207,7 +207,7 @@ class PdfFilter:
                 warn(f"truncating stream of length {len(stream)}")
                 stream = stream[:-1]
         if extraBits() != 0:
-                raise ValueError(f'{extraBits()} extra bits in stream: {[stream[:20]]} (first 20 bytes shown)')
+                raise ValueError(f'{extraBits()} extra bits in stream: length = {len(stream)}, bytesPerLine = {bytesPerLine}')
 
         # Determine dtype
         dtypes = {1:np.dtype('>u1'), 2:np.dtype('>u2'), 4:np.dtype('>u4')}

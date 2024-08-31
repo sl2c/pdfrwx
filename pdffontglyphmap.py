@@ -99,6 +99,7 @@ class PdfFontGlyphMap:
         Create an instance of PdfFontCMap from an instance of PdfFontEncoding by attempting to map
         glyph names to Unicode points.
         '''
+        if encoding == None: return None
         stdGlyphMap = PdfFontGlyphMapStandards.get_glyphName2unicodeMap(encoding.name)
 
         cmap = PdfFontCMap()

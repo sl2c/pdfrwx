@@ -244,14 +244,17 @@ class PdfColorSpace:
                 alpha.resize(w,h)
 
             # Get decoded alpha array
-            alpha_array, _ = alpha.get_array()
-            alpha_decode_default = PdfDecodeArray.get_default(alpha.get_cs(), alpha.bpc)
+            alpha_array = alpha.get_array()
+            alpha_decode_default = PdfDecodeArray.get_default(alpha.ColorSpace, alpha.bpc)
             alpha_array = PdfDecodeArray.decode(alpha.get_array(), alpha_decode_default, alpha.bpc)
             alpha_array = alpha_array[:,:,np.newaxis]
 
             # Un-multiply alpha
             msg(f'Unmultiplying alpha; Matte = {Matte}')
-            array =  matte_array + (array - matte_array) / alpha_array
+            array =  matte_array + (array - matte_array) / np.maximum(alpha_array, 0.000001)
+
+            # Remove Matte entry from the mask
+            mask.Matte = None
 
         # These color spaces are function-based, so apply this function
         if name in SPECIAL:
@@ -437,11 +440,17 @@ class PdfImage(AttrDict):
                 width, height = int(obj.Width), int(obj.Height)
                 cpp = self.get_cpp()
 
+                bpc_implied = (len(stream) * 8) / (width * height * cpp)
+                if bpc_implied != self.bpc and int(bpc_implied) == bpc_implied:
+                    warn(f'replacing bad image xobject\'s bpc = {self.bpc} with the implied bpc = {int(bpc_implied)}')
+                    self.bpc = int(bpc_implied)
+
                 array = PdfFilter.unpack_pixels(stream, width, cpp, self.bpc, truncate = True)
                 if array.shape[0] > height:
                     warn(f'more rows in stream than expected: {array.shape[0]} vs {height}; truncating')
                     array = array[:height]
-                assert array.shape[0] == height
+                if array.shape[0] != height:
+                    raise ValueError(f'image height mismatch: expected {height}, read {array.shape[0]}, bpc = {self.bpc}')
                 array = SImage.normalize(array)
                 if self.bpc == 1: array = array.astype(bool)
                 self.set_array(array)
@@ -572,7 +581,7 @@ class PdfImage(AttrDict):
 
     # -------------------------------------------------------------------------------------- apply_colorspace()
 
-    def apply_colorspace(self, cs:CS_TYPE, mask:PdfDict):
+    def apply_colorspace(self, cs:CS_TYPE, mask:PdfDict = None):
         '''
         '''
         actualDecode  = PdfDecodeArray.get_actual(self.Decode, cs, self.bpc)
@@ -615,7 +624,9 @@ class PdfImage(AttrDict):
             self.bpc = 8
             self.Decode = None
 
-        elif cs_name in ['/Separation', '/DeviceN', '/NChannel'] or actualDecode != defaultDecode:
+        elif cs_name in ['/Separation', '/DeviceN', '/NChannel'] \
+                or actualDecode != defaultDecode \
+                or mask != None and mask.Matte != None:
 
             self.ColorSpace, array = PdfColorSpace.reduce(cs, self.get_array(), actualDecode, self.bpc, mask)
             self.set_array(array)
@@ -870,8 +881,10 @@ class PdfImage(AttrDict):
             tiff_compression = 'group4' if pil.mode == '1' else 'tiff_adobe_deflate' if Format == 'TIFF' else None
             icc_profile = pil.info.get('icc_profile') if pil.info and embedProfile else None
 
+            dpi = self.dpi if self.dpi not in (None, (1,1)) else (72,72)
+
             if Format == 'JPEG':
-                pil.save(bs, Format, quality=Q, optimize = optimize, icc_profile = icc_profile, info = pil.info)
+                pil.save(bs, Format, quality=Q, optimize = optimize, icc_profile = icc_profile, info = pil.info, dpi=dpi)
             elif Format == 'PNG':
                 pil.save(bs, Format, optimize = optimize, icc_profile = icc_profile)
             elif Format == 'TIFF':
@@ -997,7 +1010,7 @@ class PdfImage(AttrDict):
             obj.stream = stream.decode('Latin-1')
             obj.Filter = Filter
             obj.DecodeParms = DecodeParms
-            # obj.BitsPerComponent = bpc
+            obj.BitsPerComponent = bpc
             # obj.ColorSpace = cs
 
             PdfImage.xobject_copy(obj, image_obj)
@@ -1714,7 +1727,7 @@ if __name__ == '__main__':
     ap.add_argument('-zip', action='store_true', help='compress color/gray images with JPEG')
     ap.add_argument('-jpeg', action='store_true', help='compress color/gray images with JPEG')
     ap.add_argument('-j2k', action='store_true', help='compress color/gray images with JPEG 2000')
-    ap.add_argument('-quality', '-q', type=int, default=90, metavar='Q', help='JPEG/JPEG 2000 compression quality; Q=0..100 (def=90)')
+    ap.add_argument('-quality', '-q', type=int, default=95, metavar='Q', help='JPEG/JPEG 2000 compression quality; Q=0..100 (def=95)')
     ap.add_argument('-colorspace', '-cs', type=str, metavar='S', choices=['gray', 'rgb', 'cmyk'], help='convert images to color space; S = gray|rgb|cmyk')
 
     ap.add_argument('-intent', type=str, metavar='I', choices = ['absolute', 'relative', 'perceptual', 'saturation', 'native', 'none'],
@@ -1843,6 +1856,8 @@ if __name__ == '__main__':
 
                     # image = PdfImage.decode(obj,page, adjustColors = False, applyMasks = True, applyIntent = options.applyIntent)
                     image = PdfImage(obj=obj)
+                    if options.dpi:
+                        image.dpi = (options.dpi, options.dpi)
                     stream, ext = image.saveAs('auto', render = True)
                     outputPath = fileBase  +f'.page{pageNo}.image{n+1}' + ext
                     open(outputPath, 'wb').write(stream)
