@@ -75,7 +75,7 @@ class PdfFontCore14:
         if standard_fontname == None: return None
         return '/ZapfDingbatsEncoding' if standard_fontname == '/ZapfDingbats' \
             else '/SymbolEncoding' if standard_fontname == '/Symbol' \
-            else '/StandardEncoding'
+            else '/WinAnsiEncoding'
 
     def make_name2width(fontname:PdfName):
         '''

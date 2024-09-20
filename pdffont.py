@@ -203,13 +203,14 @@ class PdfFont:
             self.font = self.make_font_dict(encoding = self.encoding, force_CID = force_CID)
  
         elif self.font:
- 
+
             if extractFontProgram:
                 self.extract_font_program()
                 self.info = self.read_pfb_info() if self.pfb \
                                 else self.read_ttf_otf_info() if (self.ttf or self.otf) \
                                 else self.read_cff_info() if self.cff \
                                 else self.read_core14()
+
             self.encoding = self.get_cid_encoding_from_type0_font() if self.is_cid() \
                                 else PdfFontEncoding(font = self.font, gid2gname = self.info.get('gid2gname'))
 
@@ -234,7 +235,7 @@ class PdfFont:
         else:
             try: self.bbox = BOX(self.get_font_descriptor().FontBBox)
             except: self.bbox = BOX([0, 0, 1000, 1000])
-            if self.bbox[3] == self.bbox[0] or self.bbox[3] == self.bbox[1]:
+            if self.bbox[2] == self.bbox[0] or self.bbox[3] == self.bbox[1]:
                 warn(f'bad FontDescriptor.FontBBox {self.bbox} for font {self}; setting to [0,0,1000,1000]')
                 self.bbox = BOX([0,0,1000,1000])
 
@@ -262,9 +263,9 @@ class PdfFont:
 
         # Set the aggregated version of cmap which combines all 3 versions above
         self.cmap = PdfFontCMap()
-        self.cmap.cc2unicode = (self.cmap_internal.cc2unicode if self.cmap_internal else {}) \
-                                | (self.cmap_toUnicode.cc2unicode if self.cmap_toUnicode else {}) \
-                                | (self.cmap_synthetic.cc2unicode if self.cmap_synthetic else {})
+        self.cmap.cc2unicode = (self.cmap_synthetic.cc2unicode if self.cmap_synthetic else {}) \
+                                | (self.cmap_internal.cc2unicode if self.cmap_internal else {}) \
+                                | (self.cmap_toUnicode.cc2unicode if self.cmap_toUnicode else {})
         self.cmap.reset_unicode2cc()
 
 
@@ -320,7 +321,7 @@ class PdfFont:
             weight = t1.font["FontInfo"].get('Weight','Medium')
             weight_to_stemv = {'Blond':50, 'Light':68,
                                 'Medium':100, 'NORMAL':100, 'Normal':100, 'Regular':100,
-                                'Italic':100, 'Roman':100,
+                                'Italic':100, 'Roman':100, 'Book':100,
                                 'Semibold':120, 'Bold':140, 'Bold Italic':140}
             info['StemV'] = weight_to_stemv[weight]
 
@@ -378,7 +379,7 @@ class PdfFont:
 
         # Get font family, subfamily (normal/italic/bold/bolditalic) & full name
         # See: https://docs.microsoft.com/en-us/typography/opentype/spec/name
-        if 'name' in ttFont:
+        try:
 
             for record in ttFont['name'].names:
 
@@ -396,8 +397,8 @@ class PdfFont:
             # Remove all spaces from FontName
             info['FontName'] = re.sub(r' *','', info['FontName'])
 
-        else:
-            warn(f'font missing \'name\' table')
+        except:
+            warn(f'missing or corrupt \'name\' table in font')
 
 
         info['numGlyphs'] = ttFont['maxp'].numGlyphs
@@ -1188,17 +1189,27 @@ class PdfFont:
 
         if font.Subtype != '/Type0': # simple fonts
 
-            if font.Widths == None:
-                name2width = PdfFontCore14.make_name2width(font.BaseFont)
-                if not name2width: raise ValueError(f'failed to get Widths for font:\n{font}')
-                encoding = PdfFontEncoding(font = font)
-                cc2width = {cc:name2width[gname] for cc,gname in encoding.cc2glyphname.items() if gname in name2width}
-            else:
+            cc2width = {}
+            if font.Widths != None:
                 if None in [font.FirstChar, font.LastChar]:
                     raise ValueError(f'broken font: {font}')
                 first, last = int(font.FirstChar), int(font.LastChar)
                 cc2width = {chr(cc):float(font.Widths[cc - first])
                                 for cc in range(first, min(last+1, first+len(font.Widths)))}
+            else:
+                # Absent Widths array means it's a Core14 font
+                name2width = PdfFontCore14.make_name2width(font.BaseFont)
+                if not name2width: raise ValueError(f'failed to get Widths for font:\n{font}')
+                encoding = PdfFontEncoding(font = font)
+                cc2width = {cc:name2width[gname] for cc,gname in encoding.cc2glyphname.items() if gname in name2width}
+
+            # Add default widths to cc's whose widths are not explicitly specified
+            if self.encoding:
+                fd = font.FontDescriptor
+                missingWidth = float(fd.MissingWidth or '0') if fd else 0
+                for cc in self.encoding.cc2glyphname:
+                    if cc not in cc2width:
+                        cc2width[cc] = missingWidth
 
         else: # CID fonts
 

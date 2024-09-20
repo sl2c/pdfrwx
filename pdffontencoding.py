@@ -94,21 +94,20 @@ class PdfFontEncoding:
 
             else:
 
-                encoding = font.Encoding if font.Encoding \
+                self.name = font.Encoding if font.Encoding \
                             else PdfFontCore14.built_in_encoding(font.BaseFont) if not isEmbedded \
                             else None
 
-                if encoding:
-                    self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(encoding)
+                if self.name:
+                    self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.name)
                 elif gid2gname:
                     self.cc2glyphname = {gid:PdfName(gname) for gid,gname in gid2gname.items()}
 
-                self.name = font.Encoding
 
-            # Limit the map; ??? DO WE REALLY WANT THIS ???
-            if font.FirstChar != None and font.LastChar != None:
-                first,last = int(font.FirstChar), int(font.LastChar)
-                self.cc2glyphname = {cc:g for cc,g in self.cc2glyphname.items() if first <= ord(cc) <= last}
+            # # Limit the map; ??? DO WE REALLY WANT THIS ???
+            # if font.FirstChar != None and font.LastChar != None:
+            #     first,last = int(font.FirstChar), int(font.LastChar)
+            #     self.cc2glyphname = {cc:g for cc,g in self.cc2glyphname.items() if first <= ord(cc) <= last}
 
 
         # reset self.glyphname2cc

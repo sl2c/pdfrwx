@@ -9,11 +9,13 @@ from .pdffont import PdfFont, PdfTextString
 from .pdffontglyphmap import PdfFontGlyphMap
 from .pdfgeometry import VEC, MAT, BOX
 
-from math import sqrt
-
 class PdfState:
 
-    def __init__(self, resources:PdfDict, glyphMap = PdfFontGlyphMap()):
+    def __init__(self,
+                 resources:PdfDict,
+                 glyphMap = PdfFontGlyphMap(),
+                 extractFontProgram:bool = False,
+                 makeSyntheticCmap:bool = False):
         '''
         Creates an instance of PdfState -- the class that keeps track of the graphics state.
 
@@ -42,6 +44,9 @@ class PdfState:
         self.__fontCache = {}
         self.resources = resources
         self.glyphMap = glyphMap
+
+        self.extractFontProgram = extractFontProgram
+        self.makeSyntheticCmap = makeSyntheticCmap
 
         self.current_state = PdfDict(
             CTM = MAT(),
@@ -110,8 +115,8 @@ class PdfState:
             else:
                 cs.font = PdfFont(font = cs.font,
                                     glyphMap = self.glyphMap,
-                                    extractFontProgram = False,
-                                    makeSyntheticCmap = False)
+                                    extractFontProgram = self.extractFontProgram,
+                                    makeSyntheticCmap = self.makeSyntheticCmap)
                 self.__fontCache[fontId] = cs.font
  
         # Text commands

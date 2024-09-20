@@ -79,7 +79,7 @@ class PdfFontGlyphMap:
         '''
         suffix_type = lambda suffix: self.DEX if all(c in string.digits for c in suffix) else self.HEX
 
-        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|Char|char|glyph|MT|.*\.g)([0-9a-fA-F]+)$',r'\1|||\2',gname)
+        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|cid|Char|char|glyph|MT|.*\.g)([0-9a-fA-F]+)$',r'\1|||\2',gname)
         gname_split = re.split(r'\|\|\|',gname_marked)
         prefix,suffix = gname_split if len(gname_split) == 2 else (None,None)
         if prefix == None: return None
@@ -201,7 +201,7 @@ class PdfFontGlyphMap:
     def strip_dot_endings(s:str):
         '''Strips ._, .sc & .cap endings from a string; useful to match variants (small caps etc) of glyph names in glyph lists
         '''
-        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|disp|big|ts1|lf))+$','', s)
+        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|disp|big|ts1|lf|swash))+$','', s)
         s1 = re.sub(r'\\rm', '', s1)
         return s1 if len(s1)>1 else s
 

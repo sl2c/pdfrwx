@@ -135,7 +135,10 @@ class MAT(list):
         lr = prev * VEC([1,0])
 
         # The space unit is determined by the aspect ratio of the previous text box
-        UNIT = SPACE_WIDTH * sqrt((ul - ll) * (ul - ll)) / sqrt((lr - ll) * (lr - ll))
+        if ll != lr:
+            UNIT = SPACE_WIDTH * sqrt((ul - ll) * (ul - ll)) / sqrt((lr - ll) * (lr - ll))
+        else:
+            UNIT = SPACE_WIDTH
 
         # The center of the left edge of the new text box:
         midPoint = self * VEC([0,0.5])

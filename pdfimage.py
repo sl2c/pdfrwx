@@ -67,7 +67,7 @@ class PdfColorSpace:
     spaces = {
         '/DeviceGray': 1, '/CalGray': 1, '/Indexed': 1, '/Separation': 1,
         '/DeviceRGB': 3, '/CalRGB': 3, '/Lab': 3, '/DeviceCMYK': 4,
-        '/ICCBased': None, 'DeviceN': None, '/NChannel': None
+        '/ICCBased': None, '/DeviceN': None, '/NChannel': None
     }
 
     # A mapping from components per pixel to PIL image modes
@@ -413,7 +413,7 @@ class PdfImage(AttrDict):
         
         self.pil = pil
         self.array = array
-        self.jp2 = jp2
+        self.jp2 = None
         self.dpi = None
 
         self.Decode = None
@@ -475,7 +475,7 @@ class PdfImage(AttrDict):
 
             elif obj.Filter == '/JPXDecode':
 
-                self.set_jp2(stream)
+                self.read_jp2_to_array(stream)
 
             else:
                 raise ValueError(f'bad filter: {obj.Filter}')
@@ -502,9 +502,8 @@ class PdfImage(AttrDict):
             
             if jp2:
 
-                self.set_jp2(jp2)
-                pil = Image.open(BytesIO(jp2))
-                self.dpi = pil.info.get('dpi')
+                self.read_jp2_to_array(jp2)
+                self.dpi = Image.open(BytesIO(jp2)).info.get('dpi')
 
             if array is not None:
                 SImage.validate(array)
@@ -759,21 +758,28 @@ class PdfImage(AttrDict):
 
     # -------------------------------------------------------------------------------------- set_jp2()
 
-    def set_jp2(self, jp2:bytes):
+    def read_jp2_to_array(self, jp2:bytes):
         '''
-        Sets self.jp2 to the jp2 image given as bytes, and self.pil & self.array to None.
-
-        This function also sets self.array, self.bpc.
-        Additionally, if self.ColorSpace is None it is also set: any user-specified
-        self.ColorSpace (read from a PDF image dictionary) override JPEG2000 internal
-        color space according to PDF Ref.
+        Reads jp2 into self.array and sets self.bpc.
+        If self.ColorSpace is None it is set to the internal colorspace of the jp2 image.
+        Also, self.jp2 is set to jp2, unless self.ColorSpace == ['/Indexed', ..].
 
         Having self.array, self.ColorSpace and self.bpc set allows for subsequent image analysis/modification.
         This leaves self.jp2 as a kind of storage for the original JPEG2000 file's bytes
         in case we want to save the jp2 image data without re-encoding.
+
+        Note: when self.ColorSpace is an /Indexed colorspace, self.array will be read as
+        a /DeviceRGB or /DeviceCMYK colorspace, and therefore, and therefore 1) self.ColorSpace
+        will be set to /DeviceRGB or /DeviceCMYK to reflect that; 2) jp2 will not be stored
+        in self.jp2.
         '''
         self.array, jp2_cs, self.bpc = PdfImage._jp2_read(jp2)
-        if not self.ColorSpace: self.ColorSpace = jp2_cs # obj.ColorSpace overrides internal JPX colorspace
+        cs = self.ColorSpace
+        isIndexed = isinstance(cs, PdfArray) and cs[0] == '/Indexed'
+        if not isIndexed:
+            self.jp2 = jp2
+        if not cs or isIndexed:
+            self.ColorSpace = jp2_cs # obj.ColorSpace overrides internal JPX colorspace
         self.pil = None
 
     # -------------------------------------------------------------------------------------- resize()
@@ -836,15 +842,15 @@ class PdfImage(AttrDict):
         if Format == 'JPEG2000':
 
             if self.jp2:
-                stream  = py23_diffs.convert_load(self.jp2)
+                stream  = self.jp2
             else:
                 assert Q or CR
                 if Q: assert 0 < Q <= 100
                 if CR: assert CR > 1
-                stream = PdfImage._jp2_write(self.get_array(),
-                                            alpha.get_array() if addAlpha else None,
-                                            self.Colorspace,
-                                            Q, CR)
+                stream = PdfImage._jp2_write(array = self.get_array(),
+                                            alpha = alpha.get_array() if addAlpha else None,
+                                            cs = self.ColorSpace,
+                                            Q = Q, CR = CR)
         else:
  
             # Create pil
@@ -1011,7 +1017,7 @@ class PdfImage(AttrDict):
             obj.Filter = Filter
             obj.DecodeParms = DecodeParms
             obj.BitsPerComponent = bpc
-            # obj.ColorSpace = cs
+            obj.ColorSpace = cs
 
             PdfImage.xobject_copy(obj, image_obj)
 
@@ -1579,7 +1585,7 @@ def jbig2_compress(bitonal_images:dict, cpc:bool = False):
             array = image.get_array()
             if np.mean(array) < 0.5:
                 image.set_array(np.logical_not(array))
-                decode = [int(x) for x in obj.Decode] if obj.Decode != None else None
+                decode = [float(x) for x in obj.Decode] if obj.Decode != None else None
                 obj.Decode = None if decode == [1,0] else PdfArray(['1','0'])
                 image.Decode = obj.Decode
             tif_stream, _ = image.saveAs('TIFF')
@@ -1635,6 +1641,11 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
 
     if image.bpc == 1:
 
+        if options.scale2x:
+            msg(f'upsampling with scale2x')
+            image.set_array(SImage.scale2x(image.get_array())[0])
+            modified = True
+
         if options.despeckle:
             msg(f'despeckling, threshold = {options.despeckle}')
             image.set_array(SImage.despeckle(image.get_array(), threshold = options.despeckle))
@@ -1654,8 +1665,7 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
             image.render(pdfPage = pdfPage)
             mode = {'cmyk':'CMYK', 'rgb':'RGB', 'gray':'L', 'grey':'L'}.get(options.colorspace.lower())
             msg(f'converting colorspace: {image.get_mode()} --> {mode}')
-            image.change_mode(mode, intent)
-            modified = True
+            modified = image.change_mode(mode, intent)
 
         if options.bitonal and image.get_mode() != '1':
             image.render(pdfPage = pdfPage)
@@ -1680,18 +1690,23 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
             image.set_array(SImage.resize(image.get_array(), int(image.w() * f), int(image.h() * f)))
             modified = True
 
-    if not modified: return
-    
-    obj = image.encode()
+        if options.zip:
+            msg(f'converting to zip')
+            image.set_array(image.get_array())
+            modified = True
 
-    image_obj.Filter = obj.Filter
-    image_obj.stream = obj.stream
-    image_obj.ColorSpace = obj.ColorSpace
-    image_obj.BitsPerComponent = obj.BitsPerComponent
-    image_obj.DecodeParms = obj.DecodeParms
-    image_obj.Decode = obj.Decode
-    image_obj.Width = obj.Width
-    image_obj.Height = obj.Height
+    if modified or options.colorspace and image.ColorSpace != image_obj.ColorSpace:
+    
+        obj = image.encode()
+
+        image_obj.Filter = obj.Filter
+        image_obj.stream = obj.stream
+        image_obj.ColorSpace = obj.ColorSpace
+        image_obj.BitsPerComponent = obj.BitsPerComponent
+        image_obj.DecodeParms = obj.DecodeParms
+        image_obj.Decode = obj.Decode
+        image_obj.Width = obj.Width
+        image_obj.Height = obj.Height
 
     # print('obj:')
     # print(obj)
@@ -1718,9 +1733,10 @@ if __name__ == '__main__':
     ap.add_argument('-auto', action='store_true', help='detect if gray/color images are in fact bitonal and convert them')
     ap.add_argument('-threshold', type=int, metavar='T', default=0, help='threshold adjustment; T = -255..+255; def = 0')
 
+    ap.add_argument('-scale2x', action='store_true', help='upsample bitonal images with the scale2x algorithm')
+    ap.add_argument('-despeckle', type=int, default=0, metavar='T', help='despeckle bitonal images; T = [-12..12]; def = 0')
     ap.add_argument('-jbig2', action='store_true', help='compress bitonal images with JBIG2 (lossless)')
     ap.add_argument('-cpc', action='store_true', help='pre-process bitonal images with CPCTool before JBIG2 compression')
-    ap.add_argument('-despeckle', type=int, default=0, metavar='T', help='despeckle bitonal images; T = [-12..12]; def = 0')
 
     ap.add_argument('-dict', type=int, default=20, metavar='N', help='pages per JBIG2 symbol dictionary; def = 20')
 
@@ -1825,6 +1841,7 @@ if __name__ == '__main__':
                 if options.zip or options.upsample or options.resample or options.colorspace \
                         or options.bitonal or options.predictors \
                         or options.despeckle \
+                        or options.scale2x \
                         or options.auto:
 
                     pageArg = page if options.colorspace else None
@@ -1834,10 +1851,10 @@ if __name__ == '__main__':
                     pprint(obj)
 
                 # ---------- Recompress images ----------
-                elif options.jpeg:
+                elif options.jpeg or options.j2k:
                     if PdfImage.xobject_get_bpc(obj) != 1:
                         msg('recompressing image')
-                        PdfImage.recompress(obj, Format='JPEG', Q=options.quality)
+                        PdfImage.recompress(obj, Format='JPEG' if options.jpeg else 'JPEG2000' , Q=options.quality)
                         # if image_obj.SMask:
                         #     msg('recompressing mask')
                         #     PdfImage.recompress(image_obj.SMask, Format='JPEG', Q=options.quality)
@@ -1863,10 +1880,12 @@ if __name__ == '__main__':
                     open(outputPath, 'wb').write(stream)
 
         if options.zip or options.jpeg or options.j2k or options.upsample or options.resample or options.colorspace \
-                or options.bitonal or options.predictors or options.descreen or options.despeckle or options.auto:
+                or options.bitonal or options.predictors or options.descreen \
+                or options.despeckle or options.scale2x or options.auto:
             suffix = ''
             if options.auto: suffix += f'-auto'
             if options.despeckle: suffix += f'-despeckle={options.despeckle}'
+            if options.scale2x: suffix += f'-scale2x'
             if options.upsample: suffix += f'-upsample={options.alpha}'
             if options.resample: suffix += '-resample'
             if options.colorspace: suffix += f'-{options.colorspace}'

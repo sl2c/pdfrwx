@@ -36,7 +36,12 @@ import hashlib
 class PdfStreamEditor:
 
     def __init__(self, xobj:PdfDict, glyphMap:PdfFontGlyphMap,
-                    textOnly:bool=False, graphicsOnly:bool=False, normalize=False, debug:bool=False):
+                    textOnly:bool=False,
+                    graphicsOnly:bool=False,
+                    normalize=False,
+                    debug:bool=False,
+                    extractFontProgram:bool = False,
+                    makeSyntheticCmap:bool = False):
         '''
         Parse self.stream and store the resulting parsed PDF stream tree in self.tree.
         If textOnly==True, only the text and state operators are parsed, i.e. the bare minimum that allows
@@ -53,11 +58,18 @@ class PdfStreamEditor:
         self.graphicsOnly = graphicsOnly
         self.normalize = normalize
         self.debug = debug
+
+        self.extractFontProgram = extractFontProgram
+        self.makeSyntheticCmap = makeSyntheticCmap
+
         self.isModified = False
 
         # The actual state of the stream editor should be initialized just once!
         # If a function needs to keep up with something it's 
-        self.state = PdfState(self.xobj.inheritable.Resources, self.glyphMap)
+        self.state = PdfState(resources = self.xobj.inheritable.Resources,
+                              glyphMap = self.glyphMap,
+                              extractFontProgram = self.extractFontProgram,
+                              makeSyntheticCmap = self.makeSyntheticCmap)
 
         # Parse the stream tree
         stream = self.get_stream()
@@ -74,7 +86,10 @@ class PdfStreamEditor:
         Tw  --> deleted, its effect absorbed in the explicit character displacement values in TJ
         TD  --> TL, Td
         '''
-        if state == None: state = PdfState(self.xobj.inheritable.Resources, self.glyphMap)
+        if state == None: state = PdfState(self.xobj.inheritable.Resources,
+                                           self.glyphMap,
+                                           extractFontProgram=self.extractFontProgram,
+                                           makeSyntheticCmap=self.makeSyntheticCmap)
         result = []
         for leaf in tree:
             cmd, args = leaf[0], leaf[1]
