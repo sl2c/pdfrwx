@@ -1020,8 +1020,10 @@ class PdfFont:
         if result not in self.__fontNameCache: self.__fontNameCache[result] = {}
         idx = nDuplicates(self.__fontNameCache[result], id(f))
 
-        return result + (f'-v{idx}' if idx > 1 and not PdfFontCore14.standard_fontname(result) else '') \
-                if result != None else ('/T3Font' if f.Subtype == '/Type3' else '/NoName') + f'{idx}'
+        result = result + (f'-v{idx}' if idx > 1 and not PdfFontCore14.standard_fontname(result) else '') \
+                    if result != None else ('/T3Font' if f.Subtype == '/Type3' else '/NoName') + f'{idx}'
+        
+        return PdfName(result[1:])
 
     # -------------------------------------------------------------------------------- install()
 
@@ -1265,9 +1267,6 @@ class PdfFont:
         affects Type3 fonts.
         '''
 
-        courier = PdfFont(font = PdfFontCore14.make_core14_font_dict('/Courier'))
-        arial = PdfFont(font = PdfFontCore14.make_core14_font_dict('/Arial'))
-
         # Font size & scale
         fs = 14 
         scale = 1 if self.font.Subtype != '/Type3' else t3scale if t3scale != 'auto' \
@@ -1280,7 +1279,7 @@ class PdfFont:
         streams = {}
 
         cc2g = {cc:gname[1:] for cc,gname in self.encoding.cc2glyphname.items()} if self.encoding else {}
-        cc2w = {cc:w for cc,w in self.cc2width.items() if w != 0}
+        cc2w = {cc:w for cc,w in self.cc2width.items()}
 
         # Print glyphs
 
@@ -1384,8 +1383,14 @@ class PdfFont:
         # Switch back from text mode
         for n in streams: streams[n] += 'ET\n'
 
-        pages = []
-        for n in streams:
+        def make_page_template(n:int):
+            '''
+            Makes a page template — a page an empty font table.
+            n is the code range page number: n = 0 is 0-255 etc.
+            '''
+
+            courier = PdfFont(font = PdfFontCore14.make_core14_font_dict('/Courier'))
+            arial = PdfFont(font = PdfFontCore14.make_core14_font_dict('/Arial'))
 
             # Set-up the page
             page = PdfDict(
@@ -1413,10 +1418,18 @@ class PdfFont:
             for row in range(16): stream += f'1 0 0 1 -10 {-10*(2*row) + 2} Tm ({row:X}) Tj\n'
             stream += 'ET\n'
 
-            stream += streams[n]
-
             page.Contents.stream = stream
+
+            return page
+
+        pages = []
+        for n in streams:
+            page = make_page_template(n)
+            page.Contents.stream += streams[n]
             pages.append(page)
+        
+        if len(pages) == 0:
+            pages.append(make_page_template(0))
  
         return pages
 

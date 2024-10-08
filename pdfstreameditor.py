@@ -132,17 +132,19 @@ class PdfStreamEditor:
         '''
         Introduces explicit word spacing (Tw) in text operator strings. After applying this function
         to all such strings, the Tw operators can be dropped from the stream entirely.
+
+        PDF Ref. 1.7, sec. 5.2.2: "Word spacing (Tw) is applied to every occurrence of the single-byte
+        character code 32 in a string when using a simple font or a composite font that defines code 32
+        as a single-byte code. It does not apply to occurrences of the byte value 32 in multiple-byte codes."
         '''
-        # Word spacing (Tw) is applied to every occurrence of the single-byte character code 32 in
-        # a string when using a simple font or a composite font that defines code 32 as a single-byte code.
-        # It does not apply to occurrences of the byte value 32 in multiple-byte codes (PDF Ref. 1.7, sec. 5.2.2)
         Tw = cs.Tw
-        font = cs.font
+        # font = cs.font
 
         # Note: the numbers in the TJ operator arguments array are displacements that are expressed
         # in neither the text space units, nor the glyph space units:
         # "The number is expressed in thousandths of a unit of text space" (PDF Ref sec 5.3.2)
-        scale_x = 1000
+        # For explicit math refer to PdfState.update()
+        scale_x = 1000 / cs.fontSize
         if isinstance(s,str): s = [s]
         sMod = []
         for tok in s:

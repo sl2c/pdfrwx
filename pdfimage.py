@@ -418,6 +418,7 @@ class PdfImage(AttrDict):
 
         self.Decode = None
         self.Mask = None
+        self.SMask = None
 
         self.isRendered = False
 
@@ -483,7 +484,10 @@ class PdfImage(AttrDict):
             if obj.DecodeParms and obj.Filter in ['/DCTDecode', '/JPXDecode', None]:
                 warn(f'ignoring /DecodeParms: {obj.DecodeParms}')
 
-            self.Mask = obj.Mask or obj.SMask
+            # Handle transparency
+            
+            self.Mask  = obj.Mask
+            self.SMask = obj.SMask
 
             # Invert /DeviceCMYK & /DeviceN JPEGs
             # cs_name = PdfColorSpace.get_name(self.ColorSpace)
@@ -494,12 +498,16 @@ class PdfImage(AttrDict):
         else:
 
             if pil:
-                self.ColorSpace = PdfImage._pil_get_colorspace(pil)
-                self.bpc = 1 if pil.mode == '1' else 8
-                self.dpi = pil.info.get('dpi')
 
-                # ???????????????????? PROCESS ALPHA ?????????????????????
-            
+                # Handle transparency
+                if pil.mode in ['PA','LA','RGBA']:
+                    self.pil, alpha = PdfImage._pil_split_alpha(pil)
+                    self.SMask = PdfImage(pil = alpha).encode()
+
+                self.ColorSpace = PdfImage._pil_get_colorspace(self.pil)
+                self.bpc = 1 if self.pil.mode == '1' else 8
+                self.dpi = self.pil.info.get('dpi')
+
             if jp2:
 
                 self.read_jp2_to_array(jp2)
@@ -564,7 +572,7 @@ class PdfImage(AttrDict):
         msg('rendering started')
 
         msg(f'applying image colorspace: {PdfColorSpace.toStr(self.ColorSpace)}')
-        self.apply_colorspace(self.ColorSpace, self.Mask) # Mask is needed to unmultiply alpha if necessary
+        self.apply_colorspace(self.ColorSpace, self.SMask) # Mask is needed to unmultiply alpha if necessary
 
         # Apply page default colorspace
         try:
@@ -809,7 +817,7 @@ class PdfImage(AttrDict):
         '''
         ext = {'TIFF':'.tif', 'PNG':'.png', 'JPEG':'.jpg', 'JPEG2000':'.jp2', 'JBIG2':'jb2'}
 
-        addAlpha = render and self.Mask
+        addAlpha = render and (self.Mask or self.SMask)
 
         if Format == 'JPEG' and addAlpha:
             raise ValueError(f'cannot save an image transparency as JPEG')
@@ -825,7 +833,7 @@ class PdfImage(AttrDict):
 
         if addAlpha:
             msg('rendering alpha')
-            alpha = PdfImage(obj = self.Mask)
+            alpha = PdfImage(obj = self.Mask or self.SMask)
             alpha.render()
             if alpha.w() != self.w() or alpha.h() != self.h():
                 if self.w() * self.h() > alpha.w() * alpha.h():
@@ -871,7 +879,7 @@ class PdfImage(AttrDict):
                     alpha.change_mode('RGB' if alpha.get_mode() != '1' else 'L', intent)
                     alpha_pil = alpha.get_pil()
                     # invert bitonal masks
-                    if self.Mask.ImageMask == PdfObject('true'):
+                    if self.Mask and self.Mask.ImageMask == PdfObject('true'):
                         alpha_pil = ImageChops.invert(alpha_pil)
                     PdfImage._pil_set_colorspace(alpha_pil, alpha.ColorSpace)
                     pil.putalpha(alpha_pil)
@@ -1072,6 +1080,8 @@ class PdfImage(AttrDict):
             Filter = PdfName(Filter),
             DecodeParms = DecodeParms,
             Decode = Decode or self.Decode,
+            Mask = self.Mask,
+            SMask = self.SMask,
             stream = py23_diffs.convert_load(stream)
         )
 
@@ -1539,7 +1549,8 @@ class PdfImage(AttrDict):
             if image.mode == 'RGBA':
                 r, g, b, alpha = image.split()
                 image = Image.merge('RGB',(r,g,b))
-            del alpha.info['icc_profile']
+            if 'icc_profile' in alpha.info:
+                del alpha.info['icc_profile']
             if icc_profile:
                 image.info['icc_profile'] = icc_profile
 
@@ -1727,7 +1738,7 @@ if __name__ == '__main__':
     ap.add_argument('inputPaths', nargs='+', metavar='FILE', help='input files: images or PDF')
     ap.add_argument('-output', '-o', type=str, metavar='PATH', help='output PDF file path')
     ap.add_argument('-pages', type=str, metavar='RANGE', help='process selected pages; RANGE = N1[,N2-N3[,..]]')
-    ap.add_argument('-dpi', type=int, metavar='N', help='set resolution of input images to DPI')
+    ap.add_argument('-dpi', type=float, metavar='N', help='set resolution of input images to DPI')
 
     ap.add_argument('-bitonal', action='store_true', help='convert color/gray images to bitonal using Otsu\'s algorithm')
     ap.add_argument('-auto', action='store_true', help='detect if gray/color images are in fact bitonal and convert them')

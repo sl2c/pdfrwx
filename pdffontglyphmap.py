@@ -181,7 +181,7 @@ class PdfFontGlyphMap:
         '''
         cmapRe = PdfFontCMap()
 
-        baseEncoding = PdfFontEncoding(encoding.baseEncoding)
+        baseEncoding = PdfFontEncoding(encoding.baseEncoding or '/WinAnsiEncoding')
 
         if encoding.isType3:
             cmapRe.cc2unicode = chain(self.make_cmap(encoding).cc2unicode, cmap.cc2unicode)

@@ -200,25 +200,25 @@ class PdfFontCMap:
                             start,stop = int(start,16),int(stop,16)
                             u = PdfFontCMap.UTF16BE_to_Unicode_NEW(hex)
                             if start == stop: self.cc2unicode[chr(start)] = u
-                            elif len(u) != 1: err('starting hex value in a range is multi-char')
+                            elif len(u) != 1: err(f'starting hex value in a range is multi-char; file: {bfrFilePath}')
                             else:
                                 for cc in range(start,stop+1):
                                     self.cc2unicode[chr(cc)] = chr(ord(u)+cc-start)
                             start2 = ((stop // 16 ) + 1) * 16
                         elif len(lineSplit) == 1:
                             start2 = int(lineSplit[0],16)
-                            if start2 % 16 != 0: err(f'start position is not a multiple of 16: {lineSplit[0]}')
+                            if start2 % 16 != 0: err(f'start position is not a multiple of 16: {lineSplit[0]}; file: {bfrFilePath}')
                         else:
-                            err(f'bad line in a bfr file: {line}')
+                            err(f'bad line in a bfr file: {line}; file: {bfrFilePath}')
                     except:
-                        err(f'bad line in a bfr file: {line}')
+                        err(f'bad line in a bfr file: {line}; file: {bfrFilePath}')
                 elif len(line) <= 16 and start2 != -1:
                     if len(line) < 16: line = line + ' '*(16-len(line))
                     for i in range(len(line)):
                         if line[i] != '.': self.cc2unicode[chr(start2 + i)] = line[i]
                     start2 += 16
                 else:
-                    err(f'bad line in a bfr file: {line}')
+                    err(f'bad line in a bfr file: {line}; file: {bfrFilePath}')
         self.reset_unicode2cc()
 
     # --------------------------------------------------------------------------- write_bfr_file()
