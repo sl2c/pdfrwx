@@ -129,10 +129,14 @@ class MAT(list):
         # This is the min char spacing that is considered a space
         THRESHOLD = 0.125
 
+        # Fix zero-width boxes
+        prev1 = prev.copy()
+        if prev1[0] == 0: prev1[0] = 0.000001
+
         # Previous text box
-        ll = prev * VEC([0,0])
-        ul = prev * VEC([0,1])
-        lr = prev * VEC([1,0])
+        ll = prev1 * VEC([0,0])
+        ul = prev1 * VEC([0,1])
+        lr = prev1 * VEC([1,0])
 
         # The space unit is determined by the aspect ratio of the previous text box
         if ll != lr:
@@ -144,7 +148,7 @@ class MAT(list):
         midPoint = self * VEC([0,0.5])
 
         # The midPoint coords in the previous 'box system of coordinates'
-        x,y = prev.inv() * midPoint
+        x,y = prev1.inv() * midPoint
 
         if not 0 < y < 1: spacer = '\n' * int(round(abs(y-0.5)))
         elif x - 1 < THRESHOLD * UNIT: spacer = ''

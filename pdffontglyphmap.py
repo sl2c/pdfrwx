@@ -94,7 +94,11 @@ class PdfFontGlyphMap:
 
     # --------------------------------------------------------------------------- make_cmap()
 
-    def make_cmap(self, encoding:PdfFontEncoding, mapComposites = True, quiet:bool = False):
+    def make_cmap(self,
+                  encoding:PdfFontEncoding,
+                  mapComposites = True,
+                  quiet:bool = False,
+                  explicitMap = {}):
         '''
         Create an instance of PdfFontCMap from an instance of PdfFontEncoding by attempting to map
         glyph names to Unicode points.
@@ -111,17 +115,12 @@ class PdfFontGlyphMap:
         for cc, gname in encoding.cc2glyphname.items():
 
             if gname == '/.notdef': continue
-
-            unicode = None
-            if encoding.isType3:
-                if gname == '/BnZr': unicode = chr(0) # This is how chr(0) is sometimes denoted in Type3 fonts
-                if cc == ';' and gname[1:] in [';', ';;', ';;;;', ';;;;;;;;']: unicode = ';'
-                if cc == chr(0) and gname == '/?': unicode = chr(0)
-                if unicode != None: warn(f'mapping {gname} --> {[unicode]}')
  
-            if unicode == None:
-                unicode = self.gname_to_unicode(gname, stdGlyphMap = stdGlyphMap, isType3 = encoding.isType3,
-                                                    mapComposites = mapComposites)
+            unicode = self.gname_to_unicode(gname,
+                                                stdGlyphMap = stdGlyphMap,
+                                                isType3 = encoding.isType3,
+                                                mapComposites = mapComposites,
+                                                explicitMap = explicitMap)
             if unicode != None:
                 cmap.cc2unicode[cc] = unicode
             else:
@@ -133,7 +132,12 @@ class PdfFontGlyphMap:
             warn(f'unrecognized glyph names: {u}')
         return cmap
 
-    def gname_to_unicode(self, gname, stdGlyphMap:dict = {}, isType3 = False, mapComposites = True):
+    def gname_to_unicode(self,
+                         gname,
+                         stdGlyphMap:dict = {},
+                         isType3 = False,
+                         mapComposites = True,
+                         explicitMap = {}):
         '''
         Convert glyph name to Unicode
         '''
@@ -147,7 +151,12 @@ class PdfFontGlyphMap:
             # semicolons = {';':';', ';;':chr(0), ';;;;':chr(0), ';;;;;;;;':';'}
             semicolons = {';':chr(0), ';;':';', ';;;;':chr(0), ';;;;;;;;':';'}
 
-            if gname[1:] in semicolons:
+            if gname in explicitMap:
+                unicode = explicitMap[gname]
+                warn(f'explicit mapping {gname} --> {[unicode]}')
+            elif gname == '/BnZr':
+                unicode = chr(0) # This is how chr(0) is sometimes denoted in Type3 fonts
+            elif gname[1:] in semicolons:
                 unicode = semicolons[gname[1:]]
                 warn(f'mapping {gname} --> {[unicode]}')
             elif len(gname) == 3:
@@ -201,7 +210,7 @@ class PdfFontGlyphMap:
     def strip_dot_endings(s:str):
         '''Strips ._, .sc & .cap endings from a string; useful to match variants (small caps etc) of glyph names in glyph lists
         '''
-        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|disp|big|ts1|lf|swash))+$','', s)
+        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|disp|big|small|ts1|lf|swash))+$','', s)
         s1 = re.sub(r'\\rm', '', s1)
         return s1 if len(s1)>1 else s
 

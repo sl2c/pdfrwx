@@ -17,10 +17,6 @@ Image.MAX_IMAGE_PIXELS = None
 from pdfrw import PdfObject, PdfName, PdfArray, PdfDict, IndirectPdfDict, py23_diffs
 from .common import err, msg, warn, eprint, get_key, encapsulate, decapsulate
 
-from numba import njit
-from numba.typed import List
-
-
 # ========================================================================== PdfFilter
 
 class PdfFilter:

@@ -411,10 +411,13 @@ class PdfImage(AttrDict):
         if sum(1 for x in [obj, pil, array,jp2] if x is not None) != 1:
             raise ValueError(f'exactly one of the [pil, array, obj] arguments should be given to constructor')
         
+        self.bpc = None
+        self.ColorSpace = None
+        self.dpi = None
+
         self.pil = pil
         self.array = array
         self.jp2 = None
-        self.dpi = None
 
         self.Decode = None
         self.Mask = None
@@ -441,7 +444,7 @@ class PdfImage(AttrDict):
                 width, height = int(obj.Width), int(obj.Height)
                 cpp = self.get_cpp()
 
-                bpc_implied = (len(stream) * 8) / (width * height * cpp)
+                bpc_implied = (len(stream) * 8) / (width * height * cpp) if len(stream) > 1 else 1
                 if bpc_implied != self.bpc and int(bpc_implied) == bpc_implied:
                     warn(f'replacing bad image xobject\'s bpc = {self.bpc} with the implied bpc = {int(bpc_implied)}')
                     self.bpc = int(bpc_implied)
@@ -571,17 +574,25 @@ class PdfImage(AttrDict):
 
         msg('rendering started')
 
-        msg(f'applying image colorspace: {PdfColorSpace.toStr(self.ColorSpace)}')
-        self.apply_colorspace(self.ColorSpace, self.SMask) # Mask is needed to unmultiply alpha if necessary
-
-        # Apply page default colorspace
+        # Default colorspace
         try:
-            # This will fail if cs is not among the entries of the page default colorspaces dict
             cs2cs = {'/DeviceGray':'/DefaultGray', '/DeviceRGB':'/DefaultRGB', '/DeviceCMYK':'/DefaultCMYK'}
-            default_cs = pdfPage.Resources.ColorSpace[cs2cs[self.ColorSpace]]
-            msg(f'applying page default colorspace: {PdfColorSpace.toStr(default_cs)}')
-            self.apply_colorspace(default_cs)
-        except: pass
+            cs = pdfPage.Resources.ColorSpace[cs2cs[self.ColorSpace]]
+            msg(f'Page default colorspace: {PdfColorSpace.toStr(self.ColorSpace)} --> {PdfColorSpace.toStr(cs)}')
+        except:
+            cs = self.ColorSpace
+
+        msg(f'applying image colorspace: {PdfColorSpace.toStr(cs)}')
+        self.apply_colorspace(cs, self.SMask) # Mask is needed to unmultiply alpha if necessary
+
+        # # Apply page default colorspace
+        # try:
+        #     # This will fail if cs is not among the entries of the page default colorspaces dict
+        #     cs2cs = {'/DeviceGray':'/DefaultGray', '/DeviceRGB':'/DefaultRGB', '/DeviceCMYK':'/DefaultCMYK'}
+        #     default_cs = pdfPage.Resources.ColorSpace[cs2cs[self.ColorSpace]]
+        #     msg(f'applying page default colorspace: {PdfColorSpace.toStr(default_cs)}')
+        #     self.apply_colorspace(default_cs)
+        # except: pass
 
         self.isRendered = True
         msg('rendering ended')
@@ -648,22 +659,28 @@ class PdfImage(AttrDict):
         '''
         assert self.isRendered
 
-        if mode not in ['L', 'RGB', 'CMYK']: raise ValueError(f'bad mode: {mode}')
+        if mode not in ['L', 'RGB', 'CMYK']: raise ValueError(f'cannot convert to mode: {mode}')
 
         if mode == self.get_mode() and self.ColorSpace in [PdfName.DeviceGray, PdfName.DeviceRGB, PdfName.DeviceCMYK]:
             warn(f'old and new modes are the same: {mode}')
             return False
+        
+        # Whatever the case below, either bpc will be 8 or exception will be raised
+        # and so it's safe to set bpc already at this point
+        self.bpc = 8
         
         if self.get_mode() == '1':
             if mode == 'L':
                 if self.array: self.set_array(SImage.toGray(self.array))
                 elif self.pil: self.set_pil(self.pil.convert('L'))
                 else: raise ValueError(f'bad PdfImage: {self}')
+                self.ColorSpace = '/DeviceGray'
                 return True
             elif mode == 'RGB':
                 if self.array: self.set_array(SImage.toColor(self.array))
                 elif self.pil: self.set_pil(self.pil.convert('RGB'))
                 else: raise ValueError(f'bad PdfImage: {self}')
+                self.ColorSpace = '/DeviceRGB'
                 return True
             else:
                 warn(f'cannot convert {"1"} --> {mode}')
@@ -1036,9 +1053,15 @@ class PdfImage(AttrDict):
 
     # -------------------------------------------------------------------------------------- encode()
 
-    def encode(self):
+    def encode(self, isMask:bool = False):
         '''
+        Encode a PdfImage into an image xobject. The isMask argument sets the resulting
+        obj.ImageMask for bitonal (self.bpc == 1) images; setting isMask == True while
+        encoding an non-bitonal image throws an exception.
         '''
+        if isMask and self.bpc != 1:
+            raise ValueError(f'cannot set ImageMask = true with self.bpc = {self.bpc}')
+
         DecodeParms = None
         Decode = None
 
@@ -1076,7 +1099,8 @@ class PdfImage(AttrDict):
             Width = self.w(),
             Height = self.h(),
             BitsPerComponent = self.bpc,
-            ColorSpace = self.ColorSpace,
+            ColorSpace = self.ColorSpace if not isMask else None,
+            ImageMask = PdfObject('true') if isMask else None,
             Filter = PdfName(Filter),
             DecodeParms = DecodeParms,
             Decode = Decode or self.Decode,
@@ -1708,7 +1732,7 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
 
     if modified or options.colorspace and image.ColorSpace != image_obj.ColorSpace:
     
-        obj = image.encode()
+        obj = image.encode(isMask = image_obj.ImageMask)
 
         image_obj.Filter = obj.Filter
         image_obj.stream = obj.stream
@@ -1764,8 +1788,8 @@ if __name__ == '__main__':
     ap.add_argument('-resample', type=float, metavar='F', help='resample color/gray images with bicubic interpolation')
     ap.add_argument('-upsample', action='store_true', help='upsample color/gray images x2 using Bayesian algorithm')
     ap.add_argument('-predictors', action='store_true', help='fixes incorrect PNG predictor values in images\' DecodeParms dicts')
-    ap.add_argument('-alpha', type=int, metavar='A', default=1, help='alpha for the upsampling algo, higher=sharper; A=1..10, def=1')
-    ap.add_argument('-bounds', type=str, metavar='B', default='softmax', choices=['softmax','local','none'], help='bounds for the upsampling algo, B=softmax|local|none, def=softmax')
+    ap.add_argument('-alpha', type=int, metavar='A', default=2, help='alpha for the upsampling algo, higher=sharper; A=1..10, def=2')
+    ap.add_argument('-bounds', type=str, metavar='B', default='none', choices=['softmax','local','none'], help='bounds for the upsampling algo, B=softmax|local|none, def=none')
 
     ap.add_argument('-descreen', type=float, metavar='C', help='descreen images; try confidence C = 3 (in units of stand. dev.)')
 
@@ -1825,6 +1849,8 @@ if __name__ == '__main__':
         # Iterate over pages
         cache = set()
 
+        PROCESSING_REQUESTED = False
+
         for pageNo in pageRange:
 
             print('-'*60)
@@ -1841,6 +1867,7 @@ if __name__ == '__main__':
             try: defaultColorSpaces = page.Resources.ColorSpace.keys()
             except: defaultColorSpaces = None
             print(f'Page.Resources.ColorSpace:', defaultColorSpaces)
+
             for n,idx in enumerate(images):
                 obj = images[idx]
                 print(LINE_SINGLE)
@@ -1855,23 +1882,19 @@ if __name__ == '__main__':
                         or options.scale2x \
                         or options.auto:
 
+                    PROCESSING_REQUESTED = True
+
                     pageArg = page if options.colorspace else None
                     modify_image_xobject(obj, pageArg, options)
                     print(LINE_SINGLE)
                     print("RESULT:")
                     pprint(obj)
 
-                # ---------- Recompress images ----------
-                elif options.jpeg or options.j2k:
-                    if PdfImage.xobject_get_bpc(obj) != 1:
-                        msg('recompressing image')
-                        PdfImage.recompress(obj, Format='JPEG' if options.jpeg else 'JPEG2000' , Q=options.quality)
-                        # if image_obj.SMask:
-                        #     msg('recompressing mask')
-                        #     PdfImage.recompress(image_obj.SMask, Format='JPEG', Q=options.quality)
-
                 # ---------- Descreen images ----------
-                elif options.descreen:
+                if options.descreen:
+
+                    PROCESSING_REQUESTED = True
+
                     if PdfImage.xobject_get_bpc(obj) != 1:
                         msg('descreening image')
                         image = PdfImage(obj = obj)
@@ -1879,20 +1902,31 @@ if __name__ == '__main__':
                         obj_new = image.encode()
                         PdfImage.xobject_copy(obj_new, obj)
 
+                # ---------- Recompress images ----------
+                if options.jpeg or options.j2k:
+
+                    PROCESSING_REQUESTED = True
+
+                    if PdfImage.xobject_get_bpc(obj) != 1:
+                        msg('recompressing image')
+                        PdfImage.recompress(obj, Format='JPEG' if options.jpeg else 'JPEG2000' , Q=options.quality)
+                        # if image_obj.SMask:
+                        #     msg('recompressing mask')
+                        #     PdfImage.recompress(image_obj.SMask, Format='JPEG', Q=options.quality)
+
                 # ---------- Extract images ----------
-                else:
+                if not PROCESSING_REQUESTED:
 
                     # image = PdfImage.decode(obj,page, adjustColors = False, applyMasks = True, applyIntent = options.applyIntent)
                     image = PdfImage(obj=obj)
                     if options.dpi:
                         image.dpi = (options.dpi, options.dpi)
                     stream, ext = image.saveAs('auto', render = True)
-                    outputPath = fileBase  +f'.page{pageNo}.image{n+1}' + ext
+                    outputPath = fileBase  +f'.page{pageNo:04d}.image{n+1:04d}' + ext
                     open(outputPath, 'wb').write(stream)
 
-        if options.zip or options.jpeg or options.j2k or options.upsample or options.resample or options.colorspace \
-                or options.bitonal or options.predictors or options.descreen \
-                or options.despeckle or options.scale2x or options.auto:
+        # ---------- Write processed results to PDF ----------
+        if PROCESSING_REQUESTED:
             suffix = ''
             if options.auto: suffix += f'-auto'
             if options.despeckle: suffix += f'-despeckle={options.despeckle}'

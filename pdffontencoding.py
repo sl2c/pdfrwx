@@ -140,7 +140,9 @@ class PdfFontEncoding:
     def cc2glyphname_to_differences(cc2gname:dict):
         '''
         Encodes a cc2glyphname map as an encoding differences list.
-        Returns a tuple: (differencesList, firstChar, lastChar)
+        Returns a tuple: (differencesList, firstChar, lastChar).
+        All characters in PdfName-s in differencesList are replaced with #-codes, as per PDF Ref. 3.2.4.
+        This should be done on the level of pdfrw's PdfWriter class, but sadly it is not.
         '''
         i = -1000
         firstChar, lastChar = None, None
@@ -157,6 +159,17 @@ class PdfFontEncoding:
                 if firstChar == None: firstChar = i
             diff.append(cc2gname[code])
         lastChar = i
+        assert firstChar != None
+        assert lastChar != None
+
+        # Convert chars outside 33..126 range to #-codes; see PDF Ref. Sec. 3.2.4
+        for i in range(len(diff)):
+            s = diff[i]
+            if isinstance(s, str):
+                assert s[0] == '/'
+                r = ''.join(c if 33 <= ord(c) <= 126 and ord(c) != 35 else f'#{ord(c):x}' for c in s[1:])
+                diff[i] = PdfName(r)
+
         return diff, firstChar, lastChar
 
     def conjugate(self, encoding:'PdfFontEncoding'):

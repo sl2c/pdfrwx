@@ -1035,7 +1035,7 @@ class PdfFont:
         if pdfPage.Resources == None: pdfPage.Resources = PdfDict()
         if pdfPage.Resources.Font == None: pdfPage.Resources.Font = PdfDict()
         if PdfName(fontName) in pdfPage.Resources.Font:
-            warn(f'font {fontName} already in page Resources')
+            warn(f'font {fontName} already in page Resources; overwrite = {overwrite}')
             if not overwrite: return
         pdfPage.Resources.Font[PdfName(fontName)] = self.font
 
