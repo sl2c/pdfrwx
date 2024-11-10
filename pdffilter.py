@@ -34,7 +34,7 @@ class PdfFilter:
 
         Also, checks to see if PNG predictor values (obj.DecodeParms[i].Predictor == 10..15)
         coincide with the predictor bytes in the data stream, and if not fixes obj.DecodeParms[i].Predictor
-        values.
+        values (i.e. modifies the obj!).
         '''
         assert isinstance(obj, PdfDict)
         stream = obj.stream
@@ -98,52 +98,63 @@ class PdfFilter:
 
                 elif 10 <= predictor <= 15: # PNG filters
 
-                    width_bytes = len(stream) // height
-                    array = np.frombuffer(stream,dtype='uint8').reshape(height, width_bytes)
+                    # Predictors operate on rows whose size (width_bytes) is determined by
+                    # the entries in obj.DecodeParm and not by the image parameters.
+                    # So, in general rows != height, width_bytes != width + 1
+                    width_bytes = (columns * colors * bpc + 7) // 8 + 1
+                    rows = (len(stream) + width_bytes - 1 ) // width_bytes
 
-                    # Fix incorrect PNG /Predictor value: always set it to 15
+                    # Pad with null bytes if needed
+                    res = rows * width_bytes - len(stream)
+                    if res: stream = stream + bytes([0]*res)
+
+                    # For fastest decoding, make a PNG image from the stream and decode it using PIL
+                    stream = PdfFilter.make_png_image(width_bytes-1,rows,8,'L',zlib.compress(stream),None).tobytes()
+
+                    # Remove padding
+                    if res: stream = stream[:-res]
+
+                    # Fix PNG Predictor value: set it to 15 (fixes Multivalent bug)
+                    # its actual value doesn't matter: PDF Ref. Sec. 3.3.3
                     if f < len(parms):
                         parms[f].Predictor = 15
                         obj.DecodeParms = decapsulate(parms)
                         warn(f'fixed PNG predictor: {predictor} --> 15')
 
-                        # predValues = set(np.transpose(array)[0])
-                        # if len(predValues) == 1:
-                        #     predValue = next(iter(predValues)) + 10
-                        #     if predValue != predictor:
-                        #         parms[f].Predictor = predValue
-                        #         obj.DecodeParms = decapsulate(parms)
-                        #         warn(f'fixed PNG predictor: {predictor} --> {parms[f].Predictor}')
-                        # else:
-                        #     if predictor != 15:
-                        #         parms[f].Predictor = 15
-                        #         obj.DecodeParms = decapsulate(parms)
-                        #         warn(f'fixed PNG predictor: {predictor} --> 15')
+                    # # For fastest decoding, make a PNG image from the stream and decode it using PIL
+                    # if colors in [1,3]:
 
-                    # For fastest decoding, make a PNG image from the stream and decode it using PIL
-                    if colors in [1,3]:
+                    #     print('DEBUG', len(stream), width_bytes, height)
+                    #     # print(f'DEBUG: {bpc}')
+                    #     # if bpc != 1:
+                    #     bpc=1
+                    #     mode = 'L' if colors == 1 else 'RGB'
+                    #     stream = PdfFilter.make_png_image(width,height,bpc,mode,zlib.compress(stream),None).tobytes()
+                    #     # else:
+                    #         # stream = PdfFilter.make_png_image(width_bytes-1,height,8,'L',zlib.compress(stream),None).tobytes()
 
-                        mode = 'L' if colors == 1 else 'RGB'
-                        stream = PdfFilter.make_png_image(width,height,bpc,mode,zlib.compress(stream),None).tobytes()
+                    # else:
+                    #     # If # of colors is not 1 or 3 we transform each color component into a
+                    #     # grayscale PNG image and decode it using PIL; the components are then reassembled
+    
+                    #     array = np.frombuffer(stream,dtype='uint8').reshape(height, width_bytes)
 
-                    else:
-                        # If # of colors is not 1 or 3 we transform each color component into a
-                        # grayscale PNG image and decode it using PIL; the components are then reassembled
+                    #     predVector = array[:,0].reshape(height,1)
+                    #     array = array[:,1:].reshape(height,width,colors)
+                    #     array = np.transpose(array,(2,0,1))
 
-                        predVector = array[:,0].reshape(height,1)
-                        array = array[:,1:].reshape(height,width,colors)
-                        array = np.transpose(array,(2,0,1))
+                    #     result = np.zeros(height*width*colors, dtype='uint8').reshape(colors,height,width)
+                    #     for c in range(colors):
+                    #         encoded = np.hstack((predVector,array[c])).tobytes()
+                    #         decoded = PdfFilter.make_png_image(width,height,bpc,'L',zlib.compress(encoded),None).tobytes()
+                    #         component = np.frombuffer(decoded,dtype='uint8').reshape(height, width)
+                    #         result[c] = component
 
-                        result = np.zeros(height*width*colors, dtype='uint8').reshape(colors,height,width)
-                        for c in range(colors):
-                            encoded = np.hstack((predVector,array[c])).tobytes()
-                            decoded = PdfFilter.make_png_image(width,height,bpc,'L',zlib.compress(encoded),None).tobytes()
-                            component = np.frombuffer(decoded,dtype='uint8').reshape(height, width)
-                            result[c] = component
-
-                        stream = np.transpose(result,(1,2,0)).tobytes()
+                    #     stream = np.transpose(result,(1,2,0)).tobytes()
                  
                 elif predictor == 2: # TIFF Predictor 2 filter
+
+                    # !!! THIS IS INCORRECTLY USING IMAGE WIDTH/HEIGHT !!!
 
                     array = PdfFilter.unpack_pixels(stream=stream, width=width, cpp=colors, bpc=bpc)
                     array = np.cumsum(array, axis=1, dtype = 'uint16' if bpc == 16 else 'uint8')

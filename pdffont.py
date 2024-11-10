@@ -440,6 +440,7 @@ class PdfFont:
         except:
             glyphSet = None
             warn(f'failed to get glyphSet from font: {info.get("FontName")}')
+
         if glyphSet:
             info['gid2gname'] = {chr(ttFont.getGlyphID(gname)):gname for gname in glyphSet}
             info['gname2width'] = {gname:glyphSet[gname].width * z for gname in glyphSet}
@@ -1236,9 +1237,14 @@ class PdfFont:
 
             # Add default widths to cids whose widths are not explicitly specified
             defaultWidth = int(dFont.DW) if dFont.DW else 1000
+
             if cid2gid := self.get_cidtogidmap():
                 for cc in cid2gid:
                     if cc not in cc2width: cc2width[cc] = defaultWidth
+            elif gid2gname := self.info.get('gid2gname'):
+                for cc in gid2gname:
+                    if cc not in cc2width: cc2width[cc] = defaultWidth
+
             if cidset := self.get_cidset():
                 for cc in cidset:
                     if cc not in cc2width: cc2width[cc] = defaultWidth
@@ -1349,8 +1355,8 @@ class PdfFont:
         counter = {}
         for cc in cc2w:
 
-            gname = cc2g.get(cc,'.notdef')
-            if gname == '.notdef': continue
+            gname = cc2g.get(cc, None)
+            if gname == None: continue
 
             # The math
             cid = ord(cc)

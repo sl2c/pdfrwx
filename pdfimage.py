@@ -1725,10 +1725,10 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
             image.set_array(SImage.resize(image.get_array(), int(image.w() * f), int(image.h() * f)))
             modified = True
 
-        if options.zip:
-            msg(f'converting to zip')
-            image.set_array(image.get_array())
-            modified = True
+    if options.zip:
+        msg(f'converting to zip')
+        image.set_array(image.get_array())
+        modified = True
 
     if modified or options.colorspace and image.ColorSpace != image_obj.ColorSpace:
     
@@ -1847,7 +1847,7 @@ if __name__ == '__main__':
             sys.exit()
 
         # Iterate over pages
-        cache = set()
+        # cache = set()
 
         PROCESSING_REQUESTED = False
 
@@ -1858,7 +1858,11 @@ if __name__ == '__main__':
             print('-'*60)
 
             page = pdf.pages[pageNo-1]
-            images = {name+f'_{id(obj)}':obj for name, obj in PdfObjects(page, cache=cache) 
+
+            # objects = PdfObjects(page, cache=cache)
+            objects = PdfObjects(page)
+
+            images = {name+f'_{id(obj)}':obj for name, obj in objects 
                         if isinstance(obj, PdfDict) and obj.Subtype == PdfName.Image 
                         and name not in [PdfName.Mask, PdfName.SMask]}
 
