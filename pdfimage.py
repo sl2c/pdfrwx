@@ -478,21 +478,10 @@ class PdfImage(AttrDict):
                 encodedByteAlign = parm.EncodedByteAlign == 'true'
 
                 if K == -1 and encodedByteAlign:
-                    # from pdfrwx.ccitt_pdfminer import CCITTFaxDecoder
-                    # columns = int(parm.Columns)
-                    # parser = CCITTFaxDecoder(width=columns, bytealign=True)
-                    # parser.feedbytes(stream)
-                    # result = parser.close()
-
-                    # width, height = int(obj.Width), int(obj.Height)
-                    # array = PdfFilter.unpack_pixels(result, width=width, cpp=1, bpc=1)
-                    # self.set_array(array)
-                    # print('GOT HERE!')
-
 
                     from pdfrwx.ccitt import Group4Decoder
-                    columns = int(parm.Columns)
                     decoder = Group4Decoder()
+                    columns = int(parm.Columns)
                     result = decoder.decode(stream, columns, encodedByteAlign)
                     width, height = int(obj.Width), int(obj.Height)
                     self.set_pil(ImageChops.invert(Image.frombytes('1',(width,height),result)))
@@ -500,25 +489,10 @@ class PdfImage(AttrDict):
                 else:
 
                     if encodedByteAlign:
-                        if K == -1:
-                            raise ValueError(f'/CCITTFaxDecode Group4 (T6) compression with /EncodedByteAlign == true not supported')
-                        warn(f'*** /EncodedByteAlign == true, this is in beta-testing, check results ***')
+                        warn(f'*** /CCITTFaxDecode Group3 (T4) decompression with /EncodedByteAlign is in beta-testing, check results ***')
 
                     header = PdfImage._tiff_make_header(obj)
                     self.set_pil(Image.open(BytesIO(header + stream)))
-
-
-                # from pdfrwx.ccitt import CCITTFax
-
-                # fax = CCITTFax()
-                # decoded_stream = fax.decode(stream = stream,
-                #                                 k = int(parm.K or '0'),
-                #                                 eol = parm.EndOfLine == 'true',
-                #                                 byteAlign = parm.EncodedByteAlign == 'true',
-                #                                 columns = int(parm.Columns),
-                #                                 rows = int(parm.Rows),
-                #                                 blackIs1 = parm.BlackIs1 == 'true'
-                #                             )
 
             elif obj.Filter == '/JBIG2Decode':
 

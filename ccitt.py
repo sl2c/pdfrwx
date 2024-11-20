@@ -2,8 +2,12 @@
 
 
 class Group4Decoder(object):
-    """
-    """
+    '''
+    An implementation of the CCITT Group 4 (T.6) decoder. See:
+
+    ITU-T Recommendation T.6: FACSIMILE CODING SCHEMES AND CODING
+    CONTROL FUNCTIONS FOR GROUP 4 FACSIMILE APPARATUS
+    '''
 
     WHITE = 0
     BLACK = 1
@@ -77,6 +81,10 @@ class Group4Decoder(object):
 
     def decode(self, data:bytes, columns:int, byteAlign:bool = False):
         '''
+        Decodes a CCITT Group 4 (T.6) encoded bytes stream. Returns decoded
+        bitonal image pixel data as a bytes stream, which consists of a sequence of lines,
+        each line consisting of a sequence of bits, contiguously packed,
+        with ends of lines padded with 0-bits to whole bytes, if necessary.
         '''
         MODES = self.MODES_DECODE
 
@@ -154,7 +162,7 @@ class Group4Decoder(object):
                 line += 1
                 if byteAlign:
                     if res := inPos % 8:
-                        inPos += 8 - res
+                        inPos += 8-res
                 if res := len(outBits) % 8:
                     outBits += '0'*(8-res)
                 

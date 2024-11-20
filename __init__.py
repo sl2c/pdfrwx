@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from .ccitt import *
 from .common import *
 from .djvusededitor import *
 from .djvusedparser import *
