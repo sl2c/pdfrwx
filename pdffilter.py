@@ -98,18 +98,18 @@ class PdfFilter:
 
                 elif 10 <= predictor <= 15: # PNG filters
 
-                    # Predictors operate on rows whose size (width_bytes) is determined by
+                    # Predictors operate on blocks whose size is determined by
                     # the entries in obj.DecodeParm and not by the image parameters.
-                    # So, in general rows != height, width_bytes != width + 1
-                    width_bytes = (columns * colors * bpc + 7) // 8 + 1
-                    rows = (len(stream) + width_bytes - 1 ) // width_bytes
+                    # So, in general n_blocks != height, block_size != width + 1
+                    block_size = (columns * colors * bpc + 7) // 8 + 1
+                    n_blocks = (len(stream) + block_size - 1 ) // block_size
 
                     # Pad with null bytes if needed
-                    res = rows * width_bytes - len(stream)
+                    res = n_blocks * block_size - len(stream)
                     if res: stream = stream + bytes([0]*res)
 
                     # For fastest decoding, make a PNG image from the stream and decode it using PIL
-                    stream = PdfFilter.make_png_image(width_bytes-1,rows,8,'L',zlib.compress(stream),None).tobytes()
+                    stream = PdfFilter.make_png_image(block_size-1,n_blocks,8,'L',zlib.compress(stream),None).tobytes()
 
                     # Remove padding
                     if res: stream = stream[:-res]
@@ -196,8 +196,8 @@ class PdfFilter:
         each component is a sequence of `bpc` bits. All components are contiguous within each line
         and are padded at the end of the line to the nearest full byte.
 
-        If `truncate` is True and there's a single extra byte at the end of the stream if that
-        byte is the newline char. If `truncate` is False, the presence of any extra bytes bytes
+        If `truncate` is True and there's a single extra byte at the end of the stream and if that
+        byte is the newline char this byte is truncated. After that, the presence of any extra bytes
         at the end of the stream raises an exception.
 
         The `dtype` of the returned numpy array is the either `uint8`, `uint16` or `uint32`, whichever is
@@ -211,10 +211,10 @@ class PdfFilter:
         # Truncate
         extraBits = lambda: len(stream) % bytesPerLine if bytesPerLine > 1 else 0
         if truncate and extraBits() == 1 and stream[-1] == 10:
-                warn(f"truncating stream of length {len(stream)}")
-                stream = stream[:-1]
+            warn(f"truncating stream of length {len(stream)}")
+            stream = stream[:-1]
         if extraBits() != 0:
-                raise ValueError(f'{extraBits()} extra bits in stream: length = {len(stream)}, bytesPerLine = {bytesPerLine}')
+            raise ValueError(f'{extraBits()} extra bits in stream: length = {len(stream)}, bytesPerLine = {bytesPerLine}')
 
         # Determine dtype
         dtypes = {1:np.dtype('>u1'), 2:np.dtype('>u2'), 4:np.dtype('>u4')}
@@ -385,13 +385,15 @@ class PdfFilter:
                     if string:
                         table[L] = string + entry[:1]
                         L += 1
-                        if (L + earlyChange) // maxSize: codeBits += 1; maxSize *= 2
+                        if L >= maxSize or L + earlyChange >= maxSize and codeBits < 12:
+                            codeBits += 1; maxSize *= 2
                 else:
                     assert string
                     entry = string + string[:1]
                     table[L] = entry
                     L += 1
-                    if (L + earlyChange) // maxSize: codeBits += 1; maxSize *= 2
+                    if L >= maxSize or L + earlyChange >= maxSize and codeBits < 12:
+                        codeBits += 1; maxSize *= 2
 
                 yield entry
                 string = entry

@@ -98,7 +98,8 @@ class PdfFontGlyphMap:
                   encoding:PdfFontEncoding,
                   mapComposites = True,
                   quiet:bool = False,
-                  explicitMap = {}):
+                  explicitMap = {},
+                  mapSemicolons:bool = True):
         '''
         Create an instance of PdfFontCMap from an instance of PdfFontEncoding by attempting to map
         glyph names to Unicode points.
@@ -109,8 +110,9 @@ class PdfFontGlyphMap:
         cmap = PdfFontCMap()
         unrecognized = {}
 
-        # Count the number of 'weird' glyphs - glyphs whose names start with '/;'
-        # weird_count = len([v for v in encoding.cc2glyphname.values() if v[:2] == '/;'])
+        # If the special BnZr gname is used for chr(0) then we shouldn't map semicolons
+        if 'BnZr' in encoding.cc2glyphname.items():
+            mapSemicolons = False
 
         for cc, gname in encoding.cc2glyphname.items():
 
@@ -120,7 +122,8 @@ class PdfFontGlyphMap:
                                                 stdGlyphMap = stdGlyphMap,
                                                 isType3 = encoding.isType3,
                                                 mapComposites = mapComposites,
-                                                explicitMap = explicitMap)
+                                                explicitMap = explicitMap,
+                                                mapSemicolons = mapSemicolons)
             if unicode != None:
                 cmap.cc2unicode[cc] = unicode
             else:
@@ -137,7 +140,8 @@ class PdfFontGlyphMap:
                          stdGlyphMap:dict = {},
                          isType3 = False,
                          mapComposites = True,
-                         explicitMap = {}):
+                         explicitMap = {},
+                         mapSemicolons = True):
         '''
         Convert glyph name to Unicode
         '''
@@ -156,7 +160,7 @@ class PdfFontGlyphMap:
                 warn(f'explicit mapping {gname} --> {[unicode]}')
             elif gname == '/BnZr':
                 unicode = chr(0) # This is how chr(0) is sometimes denoted in Type3 fonts
-            elif gname[1:] in semicolons:
+            elif mapSemicolons and gname[1:] in semicolons:
                 unicode = semicolons[gname[1:]]
                 warn(f'mapping {gname} --> {[unicode]}')
             elif len(gname) == 3:

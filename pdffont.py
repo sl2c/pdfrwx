@@ -409,26 +409,30 @@ class PdfFont:
         minMax = [ttFont['head'].xMin, ttFont['head'].yMin, ttFont['head'].xMax, ttFont['head'].yMax]
         info['FontBBox'] = [int(z*x) for x in minMax]
 
-        if os2 := ttFont.get('OS/2'):
-            info['Ascent']      = int(z*os2.sTypoAscender)
-            info['Descent']     = int(z*os2.sTypoDescender)
-            # info['CapHeight']   = int(z*os2.sCapHeight)
-            info['CapHeight']   = int(z*os2.sTypoAscender)
+        try:
+            if os2 := ttFont.get('OS/2'):
+                info['Ascent']      = int(z*os2.sTypoAscender)
+                info['Descent']     = int(z*os2.sTypoDescender)
+                # info['CapHeight']   = int(z*os2.sCapHeight)
+                info['CapHeight']   = int(z*os2.sTypoAscender)
 
-            try: info['XHeight']     = int(z*os2.sxHeight)
-            except: pass
+                try: info['XHeight']     = int(z*os2.sxHeight)
+                except: pass
 
-            # This is a hack to get the missing StemV; see:
-            # https://stackoverflow.com/questions/35485179/stemv-value-of-the-truetype-font/
-            weight = os2.usWeightClass / 65
-            info['StemV'] = 50 + int(weight*weight + 0.5)
+                # This is a hack to get the missing StemV; see:
+                # https://stackoverflow.com/questions/35485179/stemv-value-of-the-truetype-font/
+                weight = os2.usWeightClass / 65
+                info['StemV'] = 50 + int(weight*weight + 0.5)
+        except:
+            os2 = None
+            warn(f'failed to get OS/2 table from font: {info.get("FontName")}')
 
         # Stylistic parameters
         if post := ttFont.get('post'):
             info['ItalicAngle']     = post.italicAngle
             info['isFixedPitch']    = post.isFixedPitch
 
-        if os2 := ttFont.get('OS/2'):
+        if os2:
             info['isSerif']         = os2.panose.bFamilyType == 2 and os2.panose.bSerifStyle
             info['isScript']        = os2.panose.bFamilyType == 3
 
@@ -604,6 +608,8 @@ class PdfFont:
 
         return encoding
 
+    # -------------------------------------------------------------------------------- get_cidset()
+
     def get_cidset(self):
         '''
         Returns a CIDSet of a CID font as a list of chars, or None if it does not exist
@@ -613,12 +619,15 @@ class PdfFont:
         if CIDSet:
             byteStream = py23_diffs.convert_store(PdfFilter.uncompress(CIDSet).stream)
             return [chr(i*8 + j) for i,byte in enumerate(byteStream) for j,bit in enumerate(f'{byte:08b}') if bit == '1']
+        else:
+            return None
 
     # -------------------------------------------------------------------------------- get_cidtogidmap()
 
     def get_cidtogidmap(self):
         '''
         '''
+        assert self.is_cid()
         CIDToGIDMap = self.font.DescendantFonts[0].CIDToGIDMap
         if CIDToGIDMap and isinstance(CIDToGIDMap, PdfDict):
             b = py23_diffs.convert_store(PdfFilter.uncompress(CIDToGIDMap).stream)
@@ -1214,6 +1223,11 @@ class PdfFont:
                     if cc not in cc2width:
                         cc2width[cc] = missingWidth
 
+            # Exclude code that are actually not in the font
+            gname2width = self.info.get('gname2width')
+            if gname2width and self.encoding:
+                cc2width = {cc:ww for cc,ww in cc2width.items() if self.encoding.cc2glyphname.get(cc, '/None')[1:] in gname2width}
+
         else: # CID fonts
 
             dFont = font.DescendantFonts[0]
@@ -1241,13 +1255,16 @@ class PdfFont:
             if cid2gid := self.get_cidtogidmap():
                 for cc in cid2gid:
                     if cc not in cc2width: cc2width[cc] = defaultWidth
-            elif gid2gname := self.info.get('gid2gname'):
-                for cc in gid2gname:
-                    if cc not in cc2width: cc2width[cc] = defaultWidth
-
-            if cidset := self.get_cidset():
+            elif cidset := self.get_cidset():
                 for cc in cidset:
                     if cc not in cc2width: cc2width[cc] = defaultWidth
+
+            # elif gid2gname := self.info.get('gid2gname'):
+            #     if re.search('Cambria', self.font.DescendantFonts[0].BaseFont):
+            #         pprint(self.font)
+            #     for cc in gid2gname:
+            #         if cc not in cc2width: cc2width[cc] = defaultWidth
+
 
         # Rescale from font units to document units
         # For Type 3 fonts, widths should be scaled by the FontMatrix; PDF Ref Sec. 5.5.4 Type 3 fonts
@@ -1363,7 +1380,10 @@ class PdfFont:
             col,row,n = cid % 16, (cid // 16 ) % 16, (cid // 256)
             if n not in counter: streams[n] += f'/A 3 Tf 0.75 g\n' ; counter[n] = 1
             x,y = 10*(2*col), -2*10*row
-            
+
+            # Replace non-printable chars according to name syntax (see PDF Ref. sec. 3.2.4)           
+            gname = ''.join(f'#{ord(c):02x}' if ord(c) <= 0x20 or 0x7f <= ord(c) < 0xa0 or c == '#' else c for c in gname)
+
             if gname != '':
                 if len(gname) > 17: gname = gname[:16] + '..'
                 gnameHex = gname.encode('latin').hex()

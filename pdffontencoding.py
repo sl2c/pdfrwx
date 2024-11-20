@@ -167,7 +167,7 @@ class PdfFontEncoding:
             s = diff[i]
             if isinstance(s, str):
                 assert s[0] == '/'
-                r = ''.join(c if 33 <= ord(c) <= 126 and ord(c) != 35 else f'#{ord(c):x}' for c in s[1:])
+                r = ''.join(c if 33 <= ord(c) <= 126 and ord(c) != 35 else f'#{ord(c):02x}' for c in s[1:])
                 diff[i] = PdfName(r)
 
         return diff, firstChar, lastChar

@@ -155,9 +155,14 @@ class PdfColorSpace:
         # Calculate the CIR xyY values of the white point
         X,Y,Z = [float(v) for v in dic.WhitePoint]
         x,y = X/(X+Y+Z), Y/(X+Y+Z)
+
         try:
             # LittleCMS allows to specify the white point directly when creating a Lab profile
             import littlecms as lc
+        except:
+            lc = None
+
+        if lc:
             ctx = lc.cmsCreateContext(None, None)
             white = lc.cmsCIExyY()
             white.x, white.y, white.Y = x, y, Y
@@ -174,10 +179,15 @@ class PdfColorSpace:
                 gamma = [float(v) for v in dic.Gamma] if dic.Gamma != None else [1,1,1]
                 transferFunction = [lc.cmsBuildGamma(ctx, g) for g in gamma]
                 profile = lc.cmsCreateRGBProfile(white, primaries, transferFunction)
-            with BytesIO() as bs:
-                lc.cmsSaveProfileToStream(profile, bs)
-                icc_profile = bs.getvalue()
-        except:
+            with tempfile.TemporaryDirectory() as tmp:
+                T = lambda fileName: os.path.join(tmp, fileName)
+                lc.cmsSaveProfileToFile(profile, T('profile.cms'))
+                icc_profile = open(T('profile.cms'),'rb').read()
+
+            # with BytesIO() as bs:
+            #     lc.cmsSaveProfileToStream(profile, bs)
+            #     icc_profile = bs.getvalue()
+        else:
             warn('LittleCMS not installed')
             warn('using ImageCMS with the (approximate) McCamy\'s formula for correlated temperature')
             n = (x - 0.3320) / (0.1858 - y)
@@ -461,8 +471,54 @@ class PdfImage(AttrDict):
 
             elif obj.Filter == '/CCITTFaxDecode':
 
-                header = PdfImage._tiff_make_header(obj)
-                self.set_pil(Image.open(BytesIO(header + stream)))
+                parm = obj.DecodeParms
+                assert parm
+
+                K = int(parm.K or '0')
+                encodedByteAlign = parm.EncodedByteAlign == 'true'
+
+                if K == -1 and encodedByteAlign:
+                    # from pdfrwx.ccitt_pdfminer import CCITTFaxDecoder
+                    # columns = int(parm.Columns)
+                    # parser = CCITTFaxDecoder(width=columns, bytealign=True)
+                    # parser.feedbytes(stream)
+                    # result = parser.close()
+
+                    # width, height = int(obj.Width), int(obj.Height)
+                    # array = PdfFilter.unpack_pixels(result, width=width, cpp=1, bpc=1)
+                    # self.set_array(array)
+                    # print('GOT HERE!')
+
+
+                    from pdfrwx.ccitt import Group4Decoder
+                    columns = int(parm.Columns)
+                    decoder = Group4Decoder()
+                    result = decoder.decode(stream, columns, encodedByteAlign)
+                    width, height = int(obj.Width), int(obj.Height)
+                    self.set_pil(ImageChops.invert(Image.frombytes('1',(width,height),result)))
+
+                else:
+
+                    if encodedByteAlign:
+                        if K == -1:
+                            raise ValueError(f'/CCITTFaxDecode Group4 (T6) compression with /EncodedByteAlign == true not supported')
+                        warn(f'*** /EncodedByteAlign == true, this is in beta-testing, check results ***')
+
+                    header = PdfImage._tiff_make_header(obj)
+                    self.set_pil(Image.open(BytesIO(header + stream)))
+
+
+                # from pdfrwx.ccitt import CCITTFax
+
+                # fax = CCITTFax()
+                # decoded_stream = fax.decode(stream = stream,
+                #                                 k = int(parm.K or '0'),
+                #                                 eol = parm.EndOfLine == 'true',
+                #                                 byteAlign = parm.EncodedByteAlign == 'true',
+                #                                 columns = int(parm.Columns),
+                #                                 rows = int(parm.Rows),
+                #                                 blackIs1 = parm.BlackIs1 == 'true'
+                #                             )
 
             elif obj.Filter == '/JBIG2Decode':
 
@@ -740,12 +796,17 @@ class PdfImage(AttrDict):
         Creates a PIL Image representation in self.pil, if not yet created, and returns it.
         '''
         if not self.pil:
-            assert self.array is not None and self.ColorSpace != None and self.bpc != None
+
+            assert self.array is not None
+            assert self.ColorSpace is not None
+            assert self.bpc is not None
+
             msg('array -> pil')
             mode = PdfColorSpace.get_mode(self.ColorSpace, self.bpc)
             # A PIL bug: https://stackoverflow.com/questions/50134468/convert-boolean-numpy-array-to-pillow-image
             self.pil = Image.fromarray(self.array, mode = mode) if mode != '1' \
                 else Image.frombytes(mode='1', size=self.array.shape[::-1], data=np.packbits(self.array, axis=1))
+
         return self.pil
 
     # -------------------------------------------------------------------------------------- get_array()
@@ -803,8 +864,9 @@ class PdfImage(AttrDict):
         isIndexed = isinstance(cs, PdfArray) and cs[0] == '/Indexed'
         if not isIndexed:
             self.jp2 = jp2
-        if not cs or isIndexed:
-            self.ColorSpace = jp2_cs # obj.ColorSpace overrides internal JPX colorspace
+        if not cs or isIndexed: # obj.ColorSpace overrides internal JPX colorspace
+            self.ColorSpace = jp2_cs
+            self.Decode = None
         self.pil = None
 
     # -------------------------------------------------------------------------------------- resize()
@@ -1045,6 +1107,7 @@ class PdfImage(AttrDict):
             obj.ColorSpace = cs
 
             PdfImage.xobject_copy(obj, image_obj)
+            image_obj.Decode = image.Decode
 
             return True
         else:
@@ -1307,7 +1370,13 @@ class PdfImage(AttrDict):
             # Get the data
             # print(jp2k)
             try: bpc = int(jp2k.box[2].box[0].bits_per_component)
-            except: bpc = int(jp2k.box[3].box[0].bits_per_component)
+            except:
+                try: bpc = int(jp2k.box[3].box[0].bits_per_component)
+                except:
+                    bd = jp2k.codestream.segment[1].bitdepth
+                    bpc = bd[0]
+                    if not all(d == bpc for d in bd):
+                        raise ValueError(f'JPEG images with channel-specific bpc are not supported: {bd}')
 
             data = jp2k[:] # This parses all JPEG2000 image slices for a full resolution image
             if bpc == 1: data = data.astype(bool)
@@ -1383,16 +1452,21 @@ class PdfImage(AttrDict):
 
         encodedByteAlign = get_key(parm, '/EncodedByteAlign') == 'true'
         if encodedByteAlign:
-            warn(f'*** /EncodedByteAlign == true, this is in beta-testing, check results ***')
             if tiff_compression != 3:
-                raise ValueError(f'/EncodedByteAlign == true is not supported for /CCITTFaxDecode Group4 (T6) compression')
+                raise ValueError(f'/CCITTFaxDecode Group4 (T6) compression with /EncodedByteAlign == true not supported')
+            warn(f'*** /EncodedByteAlign == true, this is in beta-testing, check results ***')
 
-        tiff_header_struct = '<' + '2s' + 'H' + 'L' + 'H' + 'HHLL' * 11 + 'L'
+        nTags = 11
+        tiff_header_struct = '<' + '2s' + 'H' + 'L' + 'H' + 'HHLL' * nTags + 'L'
         tiff_header = struct.pack(tiff_header_struct,
+
+                        # --- Image header starts here
                         b'II',  # Byte order indication: Little indian
                         42,  # Version number (always 42)
                         8,  # Offset to first IFD
-                        8,  # --- IFD starts here; the number of tags in IFD
+
+                        # --- IFD starts here
+                        nTags,  # the number of tags in IFD
                         256, 4, 1, width,  # ImageWidth, LONG, 1, width
                         257, 4, 1, height,  # ImageLength, LONG, 1, length
                         258, 3, 1, bpc,  # BitsPerSample, SHORT, 1, 1; this is the default, so omit?
