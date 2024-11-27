@@ -209,10 +209,11 @@ class PdfColorSpace:
         
         * decodes it using the specified Decode array if it's not None or otherwise
         the default decode array, which is determined based on the specified colorspace and bpc;
+        see PDF Ref. 1.7 sec. 4.8.4, Table 4.40
         * un-multiplies alpha if mask.Matte is not None;
         * if the colorspace is one of `/Separation`, `/DeviceN`, `/NChannel`, reduces the colorspace
         by remapping the image array to the corresponding alternate colorspace;
-        * encodes the image array using the default Decode array based on the ending colorspace
+        * encodes the image array using the default Decode array based on the target colorspace
         (the original or the alternate one, depending on whether the colorspace has been reduced
         in the previous step) and the value of bpc == 8.
         
@@ -282,18 +283,17 @@ class PdfColorSpace:
 
         return cs, array
 
-
-    @staticmethod
-    def apply_default_page_colorspace_icc_profile(page:PdfDict, cs:CS_TYPE):
-        '''
-        If image.inf['icc_profile'] == None, apply the ICC profile from the page's default color space
-        (an entry in page.Resources.Colorspace, if present) to the image (in-place).
-        '''
-        if page == None or image.info.get('icc_profile'): return
-        try:
-            default_cs = page.Resources.ColorSpace[cs]
-        except:
-            pass
+    # @staticmethod
+    # def apply_default_page_colorspace_icc_profile(page:PdfDict, cs:CS_TYPE):
+    #     '''
+    #     If image.inf['icc_profile'] == None, apply the ICC profile from the page's default color space
+    #     (an entry in page.Resources.Colorspace, if present) to the image (in-place).
+    #     '''
+    #     if page == None or image.info.get('icc_profile'): return
+    #     try:
+    #         default_cs = page.Resources.ColorSpace[cs]
+    #     except:
+    #         pass
 
     # @staticmethod
     # def make_indexed_colorspace(palette:bytes, baseColorspace):
@@ -475,20 +475,27 @@ class PdfImage(AttrDict):
                 assert parm
 
                 K = int(parm.K or '0')
-                encodedByteAlign = parm.EncodedByteAlign == 'true'
+                EncodedByteAlign = parm.EncodedByteAlign == PdfObject('true')
 
-                if K == -1 and encodedByteAlign:
+                if K == -1 and EncodedByteAlign:
 
                     from pdfrwx.ccitt import Group4Decoder
                     decoder = Group4Decoder()
-                    columns = int(parm.Columns)
-                    result = decoder.decode(stream, columns, encodedByteAlign)
+                    Columns = int(parm.Columns)
+
+                    result = decoder.decode(data = stream,
+                                            Columns = Columns,
+                                            EncodedByteAlign = EncodedByteAlign)
+
                     width, height = int(obj.Width), int(obj.Height)
-                    self.set_pil(ImageChops.invert(Image.frombytes('1',(width,height),result)))
+                    pil = Image.frombytes('1',(width,height),result)
+                    if parm.BlackIs1 != PdfObject('true'):
+                        pil = ImageChops.invert(pil)
+                    self.set_pil(pil)
 
                 else:
 
-                    if encodedByteAlign:
+                    if EncodedByteAlign:
                         warn(f'*** /CCITTFaxDecode Group3 (T4) decompression with /EncodedByteAlign is in beta-testing, check results ***')
 
                     header = PdfImage._tiff_make_header(obj)
@@ -1666,11 +1673,15 @@ def jbig2_compress(bitonal_images:dict, cpc:bool = False):
             pprint(obj)
             image = PdfImage(obj = obj)
             array = image.get_array()
+
+            # In order for the JBIG2 compression to work effectively the image has to be mostly white
+            # If it's not, invert it and change the /Decode array appropriately
             if np.mean(array) < 0.5:
                 image.set_array(np.logical_not(array))
                 decode = [float(x) for x in obj.Decode] if obj.Decode != None else None
-                obj.Decode = None if decode == [1,0] else PdfArray(['1','0'])
+                obj.Decode = None if decode == [1,0] else PdfArray([1,0])
                 image.Decode = obj.Decode
+
             tif_stream, _ = image.saveAs('TIFF')
             tif_path = T(f'in-{n:04d}.tif')
             open(tif_path, 'wb').write(tif_stream)
@@ -1895,7 +1906,7 @@ if __name__ == '__main__':
             sys.exit()
 
         # Iterate over pages
-        # cache = set()
+        cache = set()
 
         PROCESSING_REQUESTED = False
 
@@ -1907,8 +1918,8 @@ if __name__ == '__main__':
 
             page = pdf.pages[pageNo-1]
 
-            # objects = PdfObjects(page, cache=cache)
-            objects = PdfObjects(page)
+            objects = PdfObjects(page, cache=cache)
+            # objects = PdfObjects(page)
 
             images = {name+f'_{id(obj)}':obj for name, obj in objects 
                         if isinstance(obj, PdfDict) and obj.Subtype == PdfName.Image 

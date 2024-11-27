@@ -400,6 +400,7 @@ class PdfFont:
         except:
             warn(f'missing or corrupt \'name\' table in font')
 
+        fontName = info.get('FontName')
 
         info['numGlyphs'] = ttFont['maxp'].numGlyphs
 
@@ -425,7 +426,7 @@ class PdfFont:
                 info['StemV'] = 50 + int(weight*weight + 0.5)
         except:
             os2 = None
-            warn(f'failed to get OS/2 table from font: {info.get("FontName")}')
+            warn(f'failed to get OS/2 table from font: {fontName}')
 
         # Stylistic parameters
         if post := ttFont.get('post'):
@@ -440,14 +441,17 @@ class PdfFont:
         # info['DefaultWidth'] = int(round(ttf.metrics.defaultWidth, 0))
 
         # Set maps
-        try: glyphSet = ttFont.getGlyphSet()
+        try:
+            glyphSet = ttFont.getGlyphSet()
         except:
             glyphSet = None
-            warn(f'failed to get glyphSet from font: {info.get("FontName")}')
+            warn(f'failed to get glyphSet from font: {fontName}')
 
-        if glyphSet:
-            info['gid2gname'] = {chr(ttFont.getGlyphID(gname)):gname for gname in glyphSet}
-            info['gname2width'] = {gname:glyphSet[gname].width * z for gname in glyphSet}
+        if glyphSet is not None:
+            try: info['gid2gname'] = {chr(ttFont.getGlyphID(gname)):gname for gname in glyphSet}
+            except: warn(f'failed to get gid2gname from font: {fontName}')
+            try: info['gname2width'] = {gname:glyphSet[gname].width * z for gname in glyphSet}
+            except: warn(f'failed to get from gname2width font: {fontName}')
         
         if cmap := ttFont.get('cmap'):
             info['isSymbolic'] = any(table.platformID == 3 and table.platEncID == 0 for table in cmap.tables)

@@ -301,12 +301,12 @@ class PdfFilter:
             if runLength == 128: break
             elif 0 <= runLength < 128:
                 j = (i + 1) + (runLength + 1)
-                s += string[i+1, j]
+                s += string[i+1:j]
                 i = j
             else:
-                s += string[i+1] * (257 - runLength)
+                s += string[i+1].to_bytes(1,'big') * (257 - runLength)
                 i += 2
-        string = s
+        return s
 
     # -------------------------------------------------------------------- rle_encode()
 

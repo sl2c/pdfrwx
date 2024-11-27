@@ -1,6 +1,5 @@
 # CCITT Group4 Decoder
 
-
 class Group4Decoder(object):
     '''
     An implementation of the CCITT Group 4 (T.6) decoder. See:
@@ -8,9 +7,6 @@ class Group4Decoder(object):
     ITU-T Recommendation T.6: FACSIMILE CODING SCHEMES AND CODING
     CONTROL FUNCTIONS FOR GROUP 4 FACSIMILE APPARATUS
     '''
-
-    WHITE = 0
-    BLACK = 1
 
     EOFB = '000000000001000000000001'
 
@@ -79,32 +75,36 @@ class Group4Decoder(object):
 
     # ---------------------------------------------------------------------------------------- decode()
 
-    def decode(self, data:bytes, columns:int, byteAlign:bool = False):
+    def decode(self, data:bytes, Columns:int, EncodedByteAlign:bool = False):
         '''
         Decodes a CCITT Group 4 (T.6) encoded bytes stream. Returns decoded
         bitonal image pixel data as a bytes stream, which consists of a sequence of lines,
         each line consisting of a sequence of bits, contiguously packed,
         with ends of lines padded with 0-bits to whole bytes, if necessary.
         '''
+
         MODES = self.MODES_DECODE
+        WHITE, BLACK = 0, 1
+
+        toBytes = lambda bits: b''.join(int(bits[i:i+8],2).to_bytes(1,'big') for i in range(0,len(bits),8))
 
         # Bit streams
         inBits = ''.join(f'{d:08b}' for d in data)
         inPos = 0
         outBits = ''
         peek = lambda i: inBits[inPos:inPos+i]
-        getBit = lambda color: '0' if color == self.WHITE else '1'
+        getBit = lambda color: '0' if color == WHITE else '1'
 
         b = []
         a = []
-        a0 = -1
-        color = self.WHITE
+        a0 = 0
+        color = WHITE
         line = 0
 
         while True:
 
-            b1 = next((b1 for n,b1 in enumerate(b) if b1 > a0 and n%2 == color), columns)
-            b2 = next((b2 for n,b2 in enumerate(b) if b2 >= b1 and n%2 == color^1), columns)
+            b1 = next((b1 for n,b1 in enumerate(b) if b1 > a0 and n%2 == color), Columns)
+            b2 = next((b2 for n,b2 in enumerate(b) if b2 >= b1 and n%2 == color^1), Columns)
 
             l = None
             for i in range(1,8):
@@ -131,36 +131,42 @@ class Group4Decoder(object):
                         # Vertical mode (flips color)
                         outBits += getBit(color)*(b1 + l - a0)
                         a0 = b1 + l
-                        if a0 < columns:
+                        if a0 < Columns:
                             a.append(a0)
                         color ^= 1
                     elif l == 'EXT':
-                        # Extensions, incl. uncompressed mode — implement this later when sample files are available
+                        # Extensions, incl. uncompressed mode: implement later when sample files are available
                         l = peek(3)
                         raise ValueError(f"Extension code not implemented: E{l:03b}")
                     
                     break
                     
             if l is None:
-                # Check for EOFB at the end of file
-                if peek(24) == self.EOFB:
-                    if res := len(outBits) % 8:
-                        outBits += '0'*(8-res)
-                    result = b''.join(int(outBits[i:i+8],2).to_bytes(1,'big') for i in range(0,len(outBits),8))
-                    return result
-                else:
-                    raise ValueError(f'cannot read this: {peek(24):0{24}b}')
 
-            if a0 > columns:
+                if peek(24) != self.EOFB:
+
+                    nBytes = (Columns + 7 ) // 8
+                    if a0 < nBytes * 8:
+                        outBits += '0' * (nBytes * 8 - a0)
+                    from PIL import Image, ImageChops
+                    pil = Image.frombytes('1',(Columns, line+1), toBytes(outBits))
+                    ImageChops.invert(pil).save('dump.tif')
+                    raise ValueError(f'cannot read at line = {line}, a0 = {a0}: {peek(24)}; see dump.tif')
+
+                if res := len(outBits) % 8:
+                    outBits += '0'*(8-res)
+                return toBytes(outBits)
+
+            if a0 > Columns:
                 raise ValueError(f'extra bits in row')
             
-            if a0 == columns:
+            if a0 == Columns:
                 a0 = 0
-                color = self.WHITE
+                color = WHITE
                 b = a
                 a = []
                 line += 1
-                if byteAlign:
+                if EncodedByteAlign:
                     if res := inPos % 8:
                         inPos += 8-res
                 if res := len(outBits) % 8:
@@ -172,8 +178,9 @@ class Group4Decoder(object):
     def get_run_length(self, inBits:str, inPos:int, color:int):
         '''
         '''
-        MAKEUP = self.MAKEUP_WHITE_DECODE if color == self.WHITE else self.MAKEUP_BLACK_DECODE
-        TERMINAL = self.TERMINALS_WHITE_DECODE if color == self.WHITE else self.TERMINALS_BLACK_DECODE
+        WHITE, BLACK = 0, 1
+        MAKEUP = self.MAKEUP_WHITE_DECODE if color == WHITE else self.MAKEUP_BLACK_DECODE
+        TERMINAL = self.TERMINALS_WHITE_DECODE if color == WHITE else self.TERMINALS_BLACK_DECODE
 
         peek = lambda i: inBits[pos:pos+i]
 
@@ -200,5 +207,5 @@ class Group4Decoder(object):
 
             if l is None:
                 if bits == 0:
-                    raise ValueError(f'failed to get run length')
+                    raise ValueError(f'failed to get {"white" if color == WHITE else "black"} run length: {peek(24)}')
                 return bits, pos
