@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import inspect,sys
+import inspect,sys,os
 
 from pdfrw import PdfArray, PdfDict, IndirectPdfDict, PdfObject, PdfName
 from .pdfgeometry import BOX
@@ -152,4 +152,11 @@ def pdfObjSize(obj:PdfObject, cache:set = set()):
         size,overhead = 0, len(str(obj))
 
     return size, overhead
+
+
+def getExecPath():
+    '''
+    Returns the path to the executable
+    '''
+    return os.path.dirname(__file__)
 

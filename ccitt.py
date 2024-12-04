@@ -83,6 +83,15 @@ class Group4Decoder(object):
         with ends of lines padded with 0-bits to whole bytes, if necessary.
         '''
 
+        def dump(outBits:str, Columns:int, a0:int, line:int, message:str):
+            nBytes = (Columns + 7 ) // 8
+            if a0 < nBytes * 8:
+                outBits += '0' * (nBytes * 8 - a0)
+            from PIL import Image, ImageChops
+            pil = Image.frombytes('1',(Columns, line+1), toBytes(outBits))
+            ImageChops.invert(pil).save('dump.tif')
+            raise ValueError(message + '\n' + 'salvaged parts of the image written to dump.tif')
+
         MODES = self.MODES_DECODE
         WHITE, BLACK = 0, 1
 
@@ -97,7 +106,7 @@ class Group4Decoder(object):
 
         b = []
         a = []
-        a0 = 0
+        a0 = -1
         color = WHITE
         line = 0
 
@@ -105,6 +114,8 @@ class Group4Decoder(object):
 
             b1 = next((b1 for n,b1 in enumerate(b) if b1 > a0 and n%2 == color), Columns)
             b2 = next((b2 for n,b2 in enumerate(b) if b2 >= b1 and n%2 == color^1), Columns)
+
+            if a0 == -1: a0 = 0
 
             l = None
             for i in range(1,8):
@@ -144,24 +155,17 @@ class Group4Decoder(object):
             if l is None:
 
                 if peek(24) != self.EOFB:
-
-                    nBytes = (Columns + 7 ) // 8
-                    if a0 < nBytes * 8:
-                        outBits += '0' * (nBytes * 8 - a0)
-                    from PIL import Image, ImageChops
-                    pil = Image.frombytes('1',(Columns, line+1), toBytes(outBits))
-                    ImageChops.invert(pil).save('dump.tif')
-                    raise ValueError(f'cannot read at line = {line}, a0 = {a0}: {peek(24)}; see dump.tif')
+                    dump(outBits, Columns, a0, line, f'unrecognized bits at line = {line}, a0 = {a0}: {peek(24)}')
 
                 if res := len(outBits) % 8:
                     outBits += '0'*(8-res)
                 return toBytes(outBits)
 
             if a0 > Columns:
-                raise ValueError(f'extra bits in row')
+                dump(outBits, Columns, a0, line, f'extra bits at line = {line}, a0 = {a0}')
             
             if a0 == Columns:
-                a0 = 0
+                a0 = -1
                 color = WHITE
                 b = a
                 a = []

@@ -1,14 +1,42 @@
 #!/usr/bin/env python3
 
-import string, re
+import string, re, os
 from pprint import pprint
 
 from pdfrw import PdfDict, PdfName, PdfArray
 
-from .common import err, msg, warn, chain
+from .common import err, msg, warn, chain, getExecPath
 from .pdffontencoding import PdfFontEncoding
 from .pdffontcmap import PdfFontCMap
 from .pdfobjects import PdfObjects
+
+# =========================================================================== class AdobeGlyphList
+
+class AdobeGlyphList:
+    '''
+    '''
+
+    def __init__(self):
+        '''
+        '''
+        # if decodeType3GlyphNames: glyphMapNames.append(glyphMapNameType3)
+        glyphMapNames = ['glyphlist.txt', 'glyphs-nimbus.txt', 'wingdings.txt', 'my-glyphlist.txt']
+        glyphMapPaths = [os.path.join(getExecPath(), 'glyph-lists', name) for name in glyphMapNames]
+
+        self.glyphMap = {} # a map from the (Adobe) standard glyph names to Unicode points
+
+        # Initialize self.glyphMap
+        for path in glyphMapPaths:
+            with open(path, 'r') as file:
+                for k,line in enumerate(file):
+                    s = line.strip(' \t\r\n')
+                    if s == '' or s[0] == '#': continue
+                    try: glyphName, codePointHex = re.split(';',s)
+                    except: err(f'malformed line # {k} in a glyph list: {path}')
+                    codePointHex = re.sub(r'[^0-9a-fA-F].*$','',codePointHex) # remove non-hex chars from 1st occurrence to end
+                    if len(codePointHex) < 4: err(f'malformed line # {k} in a glyph list: {path}')
+                    self.glyphMap[PdfName(glyphName)] = PdfFontCMap.UTF16BE_to_Unicode_NEW(codePointHex)
+
 
 # =========================================================================== class PdfFontGlyphMap
 
@@ -26,7 +54,11 @@ class PdfFontGlyphMap:
     DEX=1 # Digital or hex, like '12'
     HEX=2 # Hex, but not decimal, like '1F'
 
-    def __init__(self, glyphListPaths:list[str] = [], fonts:dict = {}, knownPrefixes = {}):
+    def __init__(self,
+                    loadAdobeGlyphList:bool = False,
+                    fontsForTraining:dict = {},
+                    knownPrefixes = {}
+                ):
         '''Initializes PdfFontGlyphMap by doing the following:
         
         * loads glyph map lists from the list of glyph list paths (1st argument)
@@ -40,27 +72,23 @@ class PdfFontGlyphMap:
 
         All three arguments may be safely omitted.
         '''
-        self.glyphMap = {} # a map from the (Adobe) standard glyph names to Unicode points
-        self.prefix_types = {} # a map from prefixes to suffix types for composite glyph names
 
-        # print(f"[GLYPH MAPS]: {glyphListPaths}")
+        # A map for glyph names to Unicode chars based on the Adobe Glyph List (+other lists)
+        self.adobeMap = AdobeGlyphList().glyphMap if loadAdobeGlyphList else {}
 
-        # Initialize self.glyphMap
-        for path in glyphListPaths:
-            with open(path, 'r') as file:
-                for k,line in enumerate(file):
-                    s = line.strip(' \t\r\n')
-                    if s == '' or s[0] == '#': continue
-                    try: glyphName, codePointHex = re.split(';',s)
-                    except: err(f'malformed line # {k} in a glyph list: {path}')
-                    codePointHex = re.sub(r'[^0-9a-fA-F].*$','',codePointHex) # remove non-hex chars from 1st occurrence to end
-                    if len(codePointHex) < 4: err(f'malformed line # {k} in a glyph list: {path}')
-                    self.glyphMap[PdfName(glyphName)] = PdfFontCMap.UTF16BE_to_Unicode_NEW(codePointHex)
+        # Map from composite glyph names to Unicode chars
+        # Produced as a result of training by calling composite_glyphname_to_unicode(gname) repeatedly
+        self.glyphMap = {}
+
+        # A map from prefixes to suffix types for composite glyph names
+        self.prefix_types = {}
 
         # train the composite_glyphname_to_cc() algo on glyph names from the fonts list
-        for font in [f for f in fonts.values() if f.font.Subtype != '/Type0']:
-            for gname in [g for g in font.encoding.glyphname2cc 
-                            if PdfFontGlyphMap.strip_dot_endings(g) not in self.glyphMap]:
+        fonts = [f for f in fontsForTraining.values() if f.font.Subtype != '/Type0']
+        for font in fonts:
+            strippedGlyphNames = [PdfFontGlyphMap.strip_dot_endings(g) for g in font.encoding.glyphname2cc]
+            for gname in strippedGlyphNames:
+                if gname in self.adobeMap: continue
                 self.composite_glyphname_to_unicode(gname)
 
         # add prefix to prefix type mapping from the knownPrefixes argument
@@ -127,13 +155,16 @@ class PdfFontGlyphMap:
             if unicode != None:
                 cmap.cc2unicode[cc] = unicode
             else:
-                unrecognized[ord(cc)] = gname
+                unrecognized[ord(cc)] = gname[1:]
 
         cmap.reset_unicode2cc()
         if len(unrecognized) > 0 and not quiet:
             u = ' '.join(unrecognized.values())
             warn(f'unrecognized glyph names: {u}')
         return cmap
+
+
+    # --------------------------------------------------------------------------- gname_to_unicode()
 
     def gname_to_unicode(self,
                          gname,
@@ -174,7 +205,9 @@ class PdfFontGlyphMap:
 
             g = PdfFontGlyphMap.strip_dot_endings(gname)
             g = PdfFontGlyphMap.strip_prefixes(g)
-            unicode = self.glyphMap.get(g) or stdGlyphMap.get(g) # Check external glyph map first
+
+            # Check external glyph map first
+            unicode = self.adobeMap.get(g) or self.glyphMap.get(g) or stdGlyphMap.get(g)
 
             if unicode == None and mapComposites:
 

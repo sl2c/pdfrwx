@@ -24,7 +24,7 @@ from .pdfgeometry import VEC, MAT, BOX
 import xml.etree.ElementTree as ET # for parsing hOCR files
 
 from PIL import Image, ImageOps
-from math import ceil
+from math import floor, ceil
 
 import numpy as np
 
@@ -65,7 +65,6 @@ class PdfStreamEditor:
         self.isModified = False
 
         # The actual state of the stream editor should be initialized just once!
-        # If a function needs to keep up with something it's 
         self.state = PdfState(resources = self.xobj.inheritable.Resources,
                               glyphMap = self.glyphMap,
                               extractFontProgram = self.extractFontProgram,
@@ -189,6 +188,8 @@ class PdfStreamEditor:
         '''
         self.set_stream(PdfStream.tree_to_stream(self.tree))
 
+    # --------------------------------------------------------------- recurse()
+
     def recurse(self, recursedFunction:Callable, xobjCache, *args, **kwarg):
         '''
         When trying to perform a task on any xobject's stream one should keep in mind that
@@ -222,63 +223,188 @@ class PdfStreamEditor:
 
         return recursedFunction(self, xobjCache, *args, **kwarg)
 
-    def paint_images(self, xobj:PdfDict, chunks:list, dpi = 72):
+    # --------------------------------------------------------------- flattenImages()
+
+    def flattenImages(self, dpi:float = 300):
         '''
-        Paints the images contained in chunks
+        Flatten images
         '''
+
         # Set up the canvas
-        cropBox = get_box(xobj)
-        if cropBox != None:
-            width, height = ceil(abs(cropBox[2]-cropBox[0])*dpi/72), ceil(abs(cropBox[3]-cropBox[1])*dpi/72)
-            if width == 0 or height == 0: err(f'bad CropBox: {cropBox}')
-            outImage = Image.new('RGB',(width,height), color = 'white')
-        else:
-            outImage = None
+        cropBox = get_box(self.xobj)
+        if cropBox is None: return None
         canvasWidth, canvasHeight = cropBox.w() * dpi/72, cropBox.h() * dpi/72
         canvasBox = BOX([0, 0, canvasWidth, canvasHeight])
+        width, height = ceil(canvasWidth), ceil(canvasHeight)
+        if width == 0 or height == 0: err(f'bad CropBox: {cropBox}')
+        outImage = Image.new('RGB',(width,height), color = 'white')
 
-        for image, matrix in chunks:
-            if not isinstance(image, PdfImage): continue
-            w, h = image.size
+        # This state is local to this function
+        state = PdfState(resources = self.xobj.inheritable.Resources,
+                              glyphMap = self.glyphMap,
+                              extractFontProgram = self.extractFontProgram,
+                              makeSyntheticCmap = self.makeSyntheticCmap)
+
+        res = self.xobj.inheritable.Resources
+
+        outTree = []
+        for leaf in self.tree:
+
+            cmd, args = leaf[0],leaf[1]
+            _, _ = state.update(cmd, args)
+
+            # Images
+            image = None
+            if cmd == 'Do':
+                xobj = res.XObject[args[0]]
+                if xobj.Subtype == PdfName.Image:
+                    image = PdfImage(obj = xobj)
+
+            if image is None:
+                outTree.append(leaf)
+                continue
+
+            image.render()
+            pil = image.get_pil()
+
+            w, h = pil.size
 
             # A transform from image space ([0,0,w,h]) to canvas space
             t = MAT([1, 0, 0, -1, 0, canvasHeight]) \
                         * canvasBox.transformFrom(cropBox) \
-                        * cs.CTM \
+                        * state.current_state.CTM \
                         * MAT([1/w, 0, 0, -1/h, 0, 1])
 
             # The inverse matrix; the order of elements is different in numpy
-            a,d,b,e,c,f = t.inv()
 
-            doImage = doImage.transform(outImage.size,
+            box = BOX([0,0,w,h])
+
+            tox = t * box
+
+            if abs(t[1]*h) < canvasWidth and abs(t[2]*w) < canvasHeight \
+                and abs(tox.w() - w) < 1 and abs(tox.h() - h) < 1:
+                fx, fy = w/tox.w(), h/tox.h()
+                t[1] = t[2] = 0
+                t[0] *= fx
+                t[3] *= fy
+                tox = t * box
+            elif pil.mode == '1':
+                pil = pil.convert('L')
+
+            # Transform to relative coords
+            llx, lly = tox.ll()
+            t1 = MAT([1,0,0,1,-llx,-lly]) * t 
+
+            # Transform image
+            a,d,b,e,c,f = t1.inv()
+            pil = pil.transform((w,h),
                                         Image.AFFINE, (a,b,c,d,e,f),
                                         resample = Image.BICUBIC,
                                         fillcolor = 'white')
 
-            mask = doImage.copy()
-            mask = mask.convert('L')
-            mask = ImageOps.invert(mask)
+            # Make mask
+            mask = ImageOps.invert(pil.convert('L'))
 
-            outImage.paste(doImage, mask = mask)
+            llx = int(round(llx)); lly = int(round(lly))
+            outImage.paste(pil, box = (llx, lly), mask = mask)
 
-        # m[4] = round(m[4])
-        # m[5] = round(m[5])
-        # if abs(m[0]-1) < 1/w: m[0] = 1
-        # if abs(m[3]-1) < 1/h: m[3] = 1
 
-        # msg(f'AFFINE TRANSFORM: {m}')
+        # Delete original images
+        if res.XObject:
+            toDelete = []
+            for xName, xObj in res.XObject.items():
+                if xObj.Subtype == PdfName.Image:
+                    toDelete.append(xName)
+            for xName in toDelete:
+                res.XObject[xName] = None
 
-        # 1) PIL needs and inverse matrix
+                # * MAT([1, 0, 0, -1, 0, canvasHeight]) \
+        t = cropBox.transformFrom(canvasBox) \
+                * MAT([canvasWidth, 0, 0, canvasHeight, 0, 0])
 
-        # n = np.array([[m[0],m[2],m[4]],[m[1],m[3],m[5]],[0,0,1]])
-        # n = np.linalg.inv(n)  
-        # a,b,c = n[0]
-        # d,e,f = n[1]
-        # c = round(c)
-        # f = round(f)
-        # if abs(a-1) < 1/w: a = 1
-        # if abs(e-1) < 1/h: e = 1
-        # msg(f'AFFINE TRANSFORM INVERSE: {(a,b,c,d,e,f)}')
+        # register background image
+        xobj = PdfImage(pil = outImage).encode()
+        xobj_name = self.register_xobj(xobj)
+
+        # Update tree
+        preamble = [
+            ['q', []],
+            ['cm', t],
+            ['Do', [xobj_name]],
+            ['Q', []]
+        ]
+        self.tree = preamble + outTree
+
+
+    # # --------------------------------------------------------------- paint_images()
+
+    # @staticmethod
+    # def paint_images(xobj:PdfDict, chunks:list, dpi = 72):
+    #     '''
+    #     Paints the images contained in chunks
+    #     '''
+
+    #     # Set up the canvas
+    #     cropBox = get_box(xobj)
+    #     if cropBox is None: return None
+    #     canvasWidth, canvasHeight = cropBox.w() * dpi/72, cropBox.h() * dpi/72
+    #     canvasBox = BOX([0, 0, canvasWidth, canvasHeight])
+    #     width, height = ceil(canvasWidth), ceil(canvasHeight)
+    #     if width == 0 or height == 0: err(f'bad CropBox: {cropBox}')
+    #     outImage = Image.new('RGB',(width,height), color = 'white')
+
+    #     for image, matrix in chunks:
+
+    #         if not isinstance(image, PdfImage): continue
+
+
+    #         image.render()
+    #         pil = image.get_pil()
+
+    #         w, h = pil.size
+
+
+    #         # A transform from image space ([0,0,w,h]) to canvas space
+    #         t = MAT([1, 0, 0, -1, 0, canvasHeight]) \
+    #                     * canvasBox.transformFrom(cropBox) \
+    #                     * matrix \
+    #                     * MAT([1/w, 0, 0, -1/h, 0, 1])
+
+    #         # The inverse matrix; the order of elements is different in numpy
+
+    #         box = BOX([0,0,w,h])
+
+
+    #         tox = t * box
+
+    #         if abs(t[1]*h) < canvasWidth and abs(t[2]*w) < canvasHeight \
+    #             and abs(tox.w() - w) < 1 and abs(tox.h() - h) < 1:
+    #             fx, fy = w/tox.w(), h/tox.h()
+    #             t[1] = t[2] = 0
+    #             t[0] *= fx
+    #             t[3] *= fy
+    #             tox = t * box
+    #         elif pil.mode == '1':
+    #             pil = pil.convert('L')
+
+    #         # Transform to relative coords
+    #         llx, lly = tox.ll()
+    #         t1 = MAT([1,0,0,1,-llx,-lly]) * t 
+
+    #         # Transform image
+    #         a,d,b,e,c,f = t1.inv()
+    #         pil = pil.transform((w,h),
+    #                                     Image.AFFINE, (a,b,c,d,e,f),
+    #                                     resample = Image.BICUBIC,
+    #                                     fillcolor = 'white')
+
+    #         # Make mask
+    #         mask = ImageOps.invert(pil.convert('L'))
+
+    #         llx = int(round(llx)); lly = int(round(lly))
+    #         outImage.paste(pil, box = (llx, lly), mask = mask)
+
+    #     return outImage
 
     # --------------------------------------------------------------- processText()
 
@@ -292,9 +418,12 @@ class PdfStreamEditor:
                                 options = options)
         return result
 
+    # --------------------------------------------------------------- processTextFunction()
+
     def processTextFunction(self, xobjCache:dict, tree:list=None, options:dict = {}):
         '''
-        An auxiliary function used by .print_text()
+        An auxiliary function used by .print_text(). Available options:
+        {'regex':'', 'regexCheckPath':None, 'removeOCR':False, 'render':False}
         '''
         res = self.xobj.inheritable.Resources
         firstCall = tree == None
@@ -346,10 +475,10 @@ class PdfStreamEditor:
 
                 # Images
                 if xobj.Subtype == PdfName.Image and render:
-                    image = PdfImage.decode(xobj)
-                    w,h = image.size
+                    image = PdfImage(obj = xobj)
+                    w,h = image.w(), image.h()
                     assert w != 0 and h != 0
-                    chunks.append((image, cs.CTM * MAT([w,0,0,h,0,0])))
+                    chunks.append((image, cs.CTM))
 
             # Process the nested BT/ET block a recursive call on the body
             modified = False
@@ -407,7 +536,7 @@ class PdfStreamEditor:
 
     # --------------------------------------------------------------- make_coords_relative()
 
-    def make_coords_relative(self, tree:list):
+    def make_coords_relative(self):
         path_construction_commands = ['m','l','c','v','y','re','h','W','W*']
         path_painting_commands = ['s','S','f','F','f*','B','B*','b','b*','n']
         # path_commands = path_construction_commands + path_painting_commands
@@ -420,7 +549,7 @@ class PdfStreamEditor:
         inside = False
         x,y = None, None
 
-        for leaf in tree:
+        for leaf in self.tree:
             cmd,args = leaf[0],leaf[1]
 
             if not inside:
@@ -458,7 +587,7 @@ class PdfStreamEditor:
                 else:
                     err(f'unexpected command inside path: {leaf}')
 
-        return out
+        self.tree = out
 
     # --------------------------------------------------------------- create_xobjects()
 
@@ -580,7 +709,7 @@ class PdfStreamEditor:
 
     # --------------------------------------------------------------- register_xobj()
 
-    def register_xobj(self,xobj:PdfDict):
+    def register_xobj(self, xobj:PdfDict):
         '''Registers xobj in the PDF page resources (required before you can call '/name Do')
         by safely setting resources.XObject[name] = xobj, where name == xobj.Name, unless xobj.Name
         is already in resources.XObject and id(xobj) != id(resources.XObject[xobj.Name]) -- a name collision.
@@ -597,19 +726,14 @@ class PdfStreamEditor:
         res = self.xobj.Resources
         if res.XObject == None: res.XObject = PdfDict()
         name = xobj.Name
+        if name == None: name = PdfName('XYZ')
         while name in res.XObject:
             if id(xobj) == id(res.XObject[name]): return name
             name = PdfName(name.lstrip('/')+'z')
         res.XObject[name] = xobj
         return name
 
-    # --------------------------------------------------------------- get_bbox()
-
-    # def get_bbox(self,tree:list):
-    #     '''Get bounding box for everything inside the parsed PDF stream tree;
-    #     a placeholder for now, this needs to be coded'''
-    #     return [-1000, -1000, 2000, 2000]
-
+    # --------------------------------------------------------------- fixCMaps()
 
     # def fixCMaps(self, tree:list, bbox:PdfArray, cMapsTable:dict, xobjCache:list, streamCumulative='', level=0, debug=False):
     #     '''Fix ToUnicode CMaps by running OCR on the rendered chunks of text defined in the parsed PDF stream tree

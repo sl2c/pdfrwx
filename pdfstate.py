@@ -57,9 +57,13 @@ class PdfState:
 
     def update(self, cmd, args):
         '''
-        Updates the graphics state and returns a chunk tuple (data, matrix), where data is a
-        Unicode string for text commands, a PIL image for images, or None for all others.
-        The matrix describes the object's box matrix.
+        Updates the graphics state.
+
+        If cmd is a text command (`Tj`, `TJ` etc.) , returns a tuple `(text, matrix)`,
+        where `text` is a Unicode string and `matrix` is a transformation matrix such
+        that it transforms a unit rectangle at the origin (`[0,0,1,1]`) into the text's bounding box.
+
+        If cmd is not a text command, returns a tuple `(None, None)`.
         '''
         f = lambda arg: [float(a) for a in arg] if len(args) > 1 else float(args[0])
 

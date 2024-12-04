@@ -9,7 +9,7 @@
 from pdfrw import PdfReader, PdfWriter, PdfObject, PdfName, PdfArray, PdfDict, IndirectPdfDict
 from pdfrw import py23_diffs # Ugly, but necessary: https://github.com/pmaupin/pdfrw/issues/161
 
-from pdfrwx.common import err, msg, warn, eprint, get_key, get_any_key
+from pdfrwx.common import err, msg, warn, eprint, get_key, get_any_key, getExecPath
 from pdfrwx.pdffilter import PdfFilter
 from pdfrwx.pdfobjects import PdfObjects
 from pdfrwx.pdffunctionparser import PdfFunction
@@ -33,7 +33,7 @@ from glymur import Jp2k
 
 from pprint import pprint
 
-CMYK_DEFAULT_ICC_PROFILE = open(os.path.join(os.path.dirname(__file__),'color_profiles/USWebCoatedSWOP.icc'), 'rb').read()
+CMYK_DEFAULT_ICC_PROFILE = open(os.path.join(getExecPath(),'color_profiles/USWebCoatedSWOP.icc'), 'rb').read()
 
 # ============================================================== timeit
 
@@ -602,24 +602,24 @@ class PdfImage(AttrDict):
 
     # -------------------------------------------------------------------------------------- render()
 
-    def render(self, pdfPage:PdfDict = None):
+    def render(self, pdfPage:PdfDict = None, debug:bool = False):
         '''
         '''
         if self.isRendered:
             warn('image already rendered; skipping')
             return
 
-        msg('rendering started')
+        if debug: msg('rendering started')
 
         # Default colorspace
         try:
             cs2cs = {'/DeviceGray':'/DefaultGray', '/DeviceRGB':'/DefaultRGB', '/DeviceCMYK':'/DefaultCMYK'}
             cs = pdfPage.Resources.ColorSpace[cs2cs[self.ColorSpace]]
-            msg(f'Page default colorspace: {PdfColorSpace.toStr(self.ColorSpace)} --> {PdfColorSpace.toStr(cs)}')
+            if debug: msg(f'Page default colorspace: {PdfColorSpace.toStr(self.ColorSpace)} --> {PdfColorSpace.toStr(cs)}')
         except:
             cs = self.ColorSpace
 
-        msg(f'applying image colorspace: {PdfColorSpace.toStr(cs)}')
+        if debug: msg(f'applying image colorspace: {PdfColorSpace.toStr(cs)}')
         self.apply_colorspace(cs, self.SMask) # Mask is needed to unmultiply alpha if necessary
 
         # # Apply page default colorspace
@@ -632,7 +632,7 @@ class PdfImage(AttrDict):
         # except: pass
 
         self.isRendered = True
-        msg('rendering ended')
+        if debug: msg('rendering ended')
 
     # -------------------------------------------------------------------------------------- apply_colorspace()
 

@@ -233,8 +233,8 @@ class BOX(list):
 
     def transformFrom(self, box: 'BOX'):
         '''Returns a mat such that mat * box == self'''
-        s1x,s1y = self.ll; s2x,s2y = self.ur
-        b1x,b1y = box.ll; b2x,b2y = box.ur
+        s1x,s1y = self.ll(); s2x,s2y = self.ur()
+        b1x,b1y = box.ll(); b2x,b2y = box.ur()
         return MAT([1,0,0,1,s1x,s1y]) * MAT([(s2x-s1x)/(b2x-b1x),0,0,(s2y-s1y)/(b2y-b1y),0,0]) * MAT([1,0,0,1,-b1x,-b1y])
 
 # # ========================================================

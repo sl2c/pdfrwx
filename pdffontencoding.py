@@ -12,20 +12,22 @@ from .pdffilter import PdfFilter
 
 class PdfFontEncoding:
 
-    # --------------------------------------------------------------------------- __init__()
+    # -------------------------------------------------------------------------------- __init__()
 
     def __init__(self,
                  name:str = None,
                  differences:list = None,
                  font:PdfDict = None,
                  ignoreBaseEncoding = False,
-                 gid2gname:dict = None):
+                 fontInfo:dict = None):
         '''Creates an instance of the PdfFontEncoding class from the name of the encoding,
         a /Differences list or from a PDF font dict.
         '''
         self.name = None
         self.isType3 = False
         self.baseEncoding = None
+
+        gid2gname = fontInfo.get('gid2gname') if fontInfo else None
 
         # self.baseEncoding = '/WinAnsiEncoding'
 
@@ -67,7 +69,6 @@ class PdfFontEncoding:
 
                 if not ignoreBaseEncoding and not self.isType3:
 
-
                     self.baseEncoding = font.Encoding.BaseEncoding if font.Encoding.BaseEncoding \
                         else PdfFontCore14.built_in_encoding(font.BaseFont) if not isEmbedded \
                         else None
@@ -76,7 +77,6 @@ class PdfFontEncoding:
                         self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding)
                     elif gid2gname:
                         self.cc2glyphname = {gid:PdfName(gname) for gid,gname in gid2gname.items()}
-                        
 
                 # PDF Ref. v1.7 sec. 5.5.5:
                 # If the Encoding entry is a dictionary, the table is initialized with the entries from the
@@ -96,23 +96,25 @@ class PdfFontEncoding:
 
                 self.name = font.Encoding if font.Encoding \
                             else PdfFontCore14.built_in_encoding(font.BaseFont) if not isEmbedded \
+                            else '/TrueType' if font.Subtype == '/TrueType' \
                             else None
 
-                if self.name:
+                if self.name == '/TrueType':
+                    if cmap30 := fontInfo.get('cmap30'):
+                        self.cc2glyphname = {cc:PdfName(gname) for cc,gname in cmap30.items()}
+                    elif cmap10 := fontInfo.get('cmap10'):
+                        self.cc2glyphname = {cc:PdfName(gname) for cc,gname in cmap10.items()}
+                    else:
+                        raise ValueError(f'no built-in encoding in a TrueType font: {font.BaseFont}')
+                elif self.name:
                     self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.name)
                 elif gid2gname:
                     self.cc2glyphname = {gid:PdfName(gname) for gid,gname in gid2gname.items()}
 
-
-            # # Limit the map; ??? DO WE REALLY WANT THIS ???
-            # if font.FirstChar != None and font.LastChar != None:
-            #     first,last = int(font.FirstChar), int(font.LastChar)
-            #     self.cc2glyphname = {cc:g for cc,g in self.cc2glyphname.items() if first <= ord(cc) <= last}
-
-
         # reset self.glyphname2cc
         self.reset_glyphname2cc()
 
+    # -------------------------------------------------------------------------------- differences_to_cc2glyphname()
 
     def differences_to_cc2glyphname(differences:list):
         '''
@@ -136,6 +138,8 @@ class PdfFontEncoding:
                 err(f'a token in /Differences is not a glyph or a number: {d}; full /Differences follow:\n{differences}')
 
         return encMap
+
+    # -------------------------------------------------------------------------------- cc2glyphname_to_differences()
 
     def cc2glyphname_to_differences(cc2gname:dict):
         '''
@@ -172,6 +176,8 @@ class PdfFontEncoding:
 
         return diff, firstChar, lastChar
 
+    # -------------------------------------------------------------------------------- conjugate()
+
     def conjugate(self, encoding:'PdfFontEncoding'):
         '''
         Using `self` and `encoding`, creates and returns a tuple (`reEncMap`, `diffEncoding`):
@@ -199,11 +205,15 @@ class PdfFontEncoding:
         diffEncoding.isType3 = self.isType3
         return reEncMap, diffEncoding
 
+    # -------------------------------------------------------------------------------- reset_glyphname2cc()
+
     def reset_glyphname2cc(self):
         '''
         Call this function every time self.cc2glyphname changes
         '''
         self.glyphname2cc = PdfFontEncodingStandards.invert_cc2glyphname(self.cc2glyphname, self.name)
+
+    # -------------------------------------------------------------------------------- __str__()
 
     def __str__(self):
         '''

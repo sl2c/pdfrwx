@@ -143,152 +143,215 @@ class PdfTextString(str):
             result = '(' + ''.join(escapedString) + ')'
 
         return cls(result)
-        
 
-# =========================================================================== class PdfFont
 
-class PdfFont:
+# ================================================== class PdfFontDictFunc
+
+class PdfFontDictFunc:
     '''
+    Miscellaneous static font utility functions that operate on PdfDict-s
     '''
 
-    __fontNameCache = {} # a map from id(fontDict) to its consecutive number; needed to number unnamed Type3 fonts
+    # -------------------------------------------------------------------------------- is_simple()
 
-    # -------------------------------------------------------------------------------- __init__()
-
-    def __init__(self,
-                 pfb:bytes = None,
-                 cff:bytes = None,
-                 ttf:bytes = None,
-                 otf:bytes = None,
-                 font:PdfDict = None,
-                 cc2gname:dict = None,
-                 cc2unicode:dict = None,
-                 force_CID:bool = False,
-                 glyphMap:PdfFontGlyphMap = PdfFontGlyphMap(),
-                 quiet:bool = False,
-                 extractFontProgram:bool = True,
-                 makeSyntheticCmap:bool = True):
+    @staticmethod
+    def is_simple(font:PdfDict):
         '''
-        Creates an instance of PdfFont from a PFB(PFA)/CFF/TTF/OTF font file (bytes),
-        or from a PDF font dictionary object (PdfDict).
+        Checks if the font is a simple font (i.e. if font.Subtype is one of
+        '/Type1', '/Type3', '/TrueType', '/MMType1')
         '''
+        return font.Subtype in ['/Type1', '/Type3', '/TrueType', '/MMType1']
 
-        self.pfb = pfb
-        self.cff = cff
-        self.ttf = ttf
-        self.otf = otf
+    # -------------------------------------------------------------------------------- is_cid()
 
-        self.font = font
+    @staticmethod
+    def is_cid(font:PdfDict):
+        '''
+        Checks if the font is a CID font (i.e. if font.Subtype is '/Type0')
+        '''
+        # return font.Subtype == '/Type0' and not isinstance(font.Encoding, PdfDict) --- ???
+        return font.Subtype == '/Type0'
 
-        self.glyphMap = glyphMap
+    # -------------------------------------------------------------------------------- is_embedded()
 
-        self.info = {}
+    @staticmethod
+    def is_embedded(font:PdfDict):
+        '''
+        Checks if the font is embedded
+        '''
+        fd = PdfFontDictFunc.get_font_descriptor(font)
+        return fd and (fd.FontFile or fd.FontFile2 or fd.FontFile3)
 
-        if self.pfb:
- 
-            self.info = self.read_pfb_info()
-            self.encoding = self.make_encoding(cc2gname = cc2gname, cc2unicode = cc2unicode)
-            self.font = self.make_font_dict(encoding = self.encoding, force_CID = force_CID)
- 
-        elif self.cff:
+    # -------------------------------------------------------------------------------- is_symbolic()
 
-            self.info = self.read_cff_info()
-            self.encoding = self.make_encoding(cc2gname = cc2gname, cc2unicode = cc2unicode)
-            self.font = self.make_font_dict(encoding = self.encoding, force_CID = force_CID)
+    @staticmethod
+    def is_symbolic(font:PdfDict):
+        '''
+        '''
+        try: Flags = int(PdfFontDictFunc.get_font_descriptor(font).Flags)
+        except: Flags = None
 
-        elif self.ttf or self.otf:
-
-            self.info = self.read_ttf_otf_info()
-            self.encoding = self.make_encoding(cc2gname = cc2gname, cc2unicode = cc2unicode)
-            self.font = self.make_font_dict(encoding = self.encoding, force_CID = force_CID)
- 
-        elif self.font:
-
-            if extractFontProgram:
-                self.extract_font_program()
-                self.info = self.read_pfb_info() if self.pfb \
-                                else self.read_ttf_otf_info() if (self.ttf or self.otf) \
-                                else self.read_cff_info() if self.cff \
-                                else self.read_core14()
-
-            self.encoding = self.get_cid_encoding_from_type0_font() if self.is_cid() \
-                                else PdfFontEncoding(font = self.font, gid2gname = self.info.get('gid2gname'))
-
+        if Flags is not None:
+            isSymbolic = (Flags & 4 == 4)
+            isNonsymbolic = (Flags & 32 == 32)
+            assert isSymbolic ^ isNonsymbolic
         else:
+            isSymbolic = None
 
-            raise ValueError(f'at least one of the arguments must be specified: pfb/cff/ttf/otf/font')
+        return isSymbolic
 
-        # Set font name
-        self.name = self.get_font_name()
+    # -------------------------------------------------------------------------------- get_font_descriptor()
 
-        # Set chars widths
-        self.widthMissing = self.get_missingWidth()
-        self.cc2width = self.get_cc2width_from_font()
+    @staticmethod
+    def get_font_descriptor(font:PdfDict):
+        '''
+        Get the font's descriptor dictionary
+        '''
+        return font.FontDescriptor if not PdfFontDictFunc.is_cid(font) else font.DescendantFonts[0].FontDescriptor
 
-        # Set fontMatrix
-        self.fontMatrix = MAT(self.font.FontMatrix) if self.font.FontMatrix != None \
-                            else MAT([0.001, 0, 0, 0.001, 0, 0])
-        
-        # Set font's bounding box
-        if self.font.Subtype == '/Type3':
-            self.bbox = self.get_type3_bbox()
+    # -------------------------------------------------------------------------------- get_cidset()
+
+    @staticmethod
+    def get_cidset(font:PdfDict):
+        '''
+        Returns a CIDSet of a CID font as a list of chars, or None if it does not exist
+        '''
+        assert PdfFontDictFunc.is_cid(font)
+        CIDSet = font.DescendantFonts[0].FontDescriptor.CIDSet
+        if CIDSet:
+            byteStream = py23_diffs.convert_store(PdfFilter.uncompress(CIDSet).stream)
+            return [chr(i*8 + j) for i,byte in enumerate(byteStream) for j,bit in enumerate(f'{byte:08b}') if bit == '1']
         else:
-            try: self.bbox = BOX(self.get_font_descriptor().FontBBox)
-            except: self.bbox = BOX([0, 0, 1000, 1000])
-            if self.bbox[2] == self.bbox[0] or self.bbox[3] == self.bbox[1]:
-                warn(f'bad FontDescriptor.FontBBox {self.bbox} for font {self}; setting to [0,0,1000,1000]')
-                self.bbox = BOX([0,0,1000,1000])
+            return None
 
-        # Set cmap_toUnicode (read from the font's ToUnicode dict)
-        self.cmap_toUnicode = None
-        if self.font.ToUnicode:
-            try: self.cmap_toUnicode = PdfFontCMap(toUnicodeDict = self.font.ToUnicode) # /ToUnicode may be junk
-            except: pass
-            if self.cmap_toUnicode == None: warn(f'failed to read ToUnicode CMap for font: {self.name}')
+    # -------------------------------------------------------------------------------- get_cidtogidmap()
 
-        # An internal Unicode map (read from the font program)
-        self.cmap_internal = None
-        cid2unicode = self.get_cid2unicode(self.encoding)
-        if cid2unicode and len(cid2unicode) > 0:
-            self.cmap_internal = PdfFontCMap()
-            self.cmap_internal.cc2unicode = cid2unicode
-            self.cmap_internal.reset_unicode2cc()
+    @staticmethod
+    def get_cidtogidmap(font:PdfDict):
+        '''
+        Returns a `CIDToGIDMap` as a dictionary `{cid:gid}`.
+        '''
+        assert PdfFontDictFunc.is_cid(font)
+        CIDToGIDMap = font.DescendantFonts[0].CIDToGIDMap
+        if CIDToGIDMap and isinstance(CIDToGIDMap, PdfDict):
+            b = py23_diffs.convert_store(PdfFilter.uncompress(CIDToGIDMap).stream)
+            return {chr(i):chr(b[2*i]*256 + b[2*i+1]) for i in range(len(b) // 2)}
+        else:
+            return None
 
-        # Set cmap_synthetic: infer Unicode points based on glyph names using glyphMap
-        self.cmap_synthetic = None
-        if makeSyntheticCmap:
-            self.cmap_synthetic = self.glyphMap.make_cmap(encoding = self.encoding, quiet = quiet)
-            if self.cmap_synthetic and len(self.cmap_synthetic.cc2unicode) == 0:
-                self.cmap_synthetic = None
+    # -------------------------------------------------------------------------------- get_missingWidth()
 
-        # Set the aggregated version of cmap which combines all 3 versions above
-        self.cmap = PdfFontCMap()
-        self.cmap.cc2unicode = (self.cmap_synthetic.cc2unicode if self.cmap_synthetic else {}) \
-                                | (self.cmap_internal.cc2unicode if self.cmap_internal else {}) \
-                                | (self.cmap_toUnicode.cc2unicode if self.cmap_toUnicode else {})
-        self.cmap.reset_unicode2cc()
+    @staticmethod
+    def get_missingWidth(font:PdfDict):
+        '''
+        Returns the MissingWidth (in document units)
+        '''
+        assert font
+ 
+        z = abs(float(font.FontMatrix[0])) if font.FontMatrix != None else 0.001
+        if font.Subtype == '/Type3': return 0
+        elif font.Subtype == '/Type0':
+            return z * float(font.DescendantFonts[0].DW or '0')
+        else:
+            fd = font.FontDescriptor
+            return z * float(fd.MissingWidth or '0') if fd else 0
+
+    # -------------------------------------------------------------------------------- get_type3_bbox()
+
+    @staticmethod
+    def get_type3_bbox(font:PdfDict):
+        '''
+        '''
+        from pdfrwx.pdffilter import PdfFilter
+        from pdfrwx.pdfstreamparser import PdfStream
+
+        get_bbox = lambda cmd: BOX([0, 0, cmd[1][0], cmd[1][0]]) if cmd[0] == 'd0' \
+                                    else BOX(cmd[1][2:6]) if cmd[0] == 'd1' else None
+
+        isValid = lambda bbox: bbox[2] != bbox[0] and bbox[3] != bbox[1]
+
+        assert font.Subtype == '/Type3'
+
+        bbox = None
+
+        if font.FontBBox:
+            bbox = BOX([float(x) for x in font.FontBBox])
+            if isValid(bbox): return bbox
+
+        for gname,proc in font.CharProcs.items():
+
+            stream = PdfFilter.uncompress(proc).stream
+            tree = PdfStream.stream_to_tree(stream)
+
+            proc_bbox = get_bbox(tree[0])
+            if proc_bbox == None:
+                err(f'Font: {font}\nGlyph ({gname}) process stream has no d0/d1 operator:\n{proc.stream}')
+            bbox = bbox + proc_bbox if bbox != None else proc_bbox
+
+        if not isValid(bbox):
+            warn(f'bad Type3 bbox: {bbox}, font: {font}')
+            bbox = BOX([0,0,1,1])
+
+        return bbox
+
+    # -------------------------------------------------------------------------------- get_subtype_string()
+
+    @staticmethod
+    def get_subtype_string(font:PdfDict):
+        '''
+        String representation of the font's Subtype
+        '''
+        suffixes = {'/Type1C':'C', '/CIDFontType0C':'C', '/OpenType':'-OpenType'}
+
+        if not font: return None
+
+        f = font if font.Subtype != '/Type0' else font.DescendantFonts[0]
+
+        prefix = f.Subtype
+
+        fd = f.FontDescriptor
+        if not fd: return prefix
+ 
+        suffix = suffixes.get(fd.FontFile3.Subtype) if fd.FontFile3 else ''
+        return prefix + suffix
+
+    # -------------------------------------------------------------------------------- get_encoding_string()
+
+    @staticmethod
+    def get_encoding_string(font:PdfDict):
+        '''
+        String representation of the font's encoding
+        '''
+        if not font: return None
+        if not PdfFontDictFunc.is_cid(font):
+            enc = font.Encoding
+            if not isinstance(enc, PdfDict): return enc
+            return [enc.BaseEncoding, '/Differences']
+        else:
+            dFont = font.DescendantFonts[0]
+            s = []
+            if dFont.CIDToGIDMap: s.append('/CIDToGIDMap')
+            if dFont.FontDescriptor.CIDSet: s.append('/CIDSet')
+            s = ' + '.join(s)
+            return None if len(s) == 0 else s
 
 
-        # spaceWidth is only needed by the class PdfState to regenerate spaces when extracting text
-        self.spaceWidth = self.cc2width.get(self.cmap.unicode2cc.get(' ', None),0)
-        if self.spaceWidth == 0:
-            w = [v for v in self.cc2width.values() if v != 0]
-            averageWidth = sum(w)/ len(w) if len(w) > 0 else 1
-            self.spaceWidth = averageWidth
+# =========================================================================== class PdfFontFile
 
-        # if re.search('KozMin', self.name):
-        #     print('DEBUG')
-        #     pprint(self.font)
-        #     sys.exit()
+class PdfFontFile:
+    '''
+    Utility class for font files input/output operations
+    '''
 
     # -------------------------------------------------------------------------------- read_pfb_info()
 
-    def read_pfb_info(self):
+    @staticmethod
+    def read_pfb_info(font:bytes):
         '''
         '''
         with tempfile.TemporaryDirectory() as tmp:
             T = lambda fileName: os.path.join(tmp, fileName)
-            open(T('tmp.pfb'),'wb').write(self.pfb)
+            open(T('tmp.pfb'),'wb').write(font)
             t1 = T1Font(T('tmp.pfb'))
 
         try:
@@ -337,39 +400,15 @@ class PdfFont:
         # Return info
         return info
 
-    # -------------------------------------------------------------------------------- fix_ttf_font()
-
-    def fix_ttf_font(ttf:bytes):
-        '''
-        '''
-
-        ttFont = TTFont(BytesIO(ttf))
-        tableIDs = [(table.platformID, table.platEncID) for table in ttFont['cmap'].tables]
-
-        if (3,1) not in tableIDs:
-
-            msg(f'Adding an empty (3,1) cmap sub-table to the TTF font')
-
-            table = CmapSubtable.newSubtable(4)
-            table.platformID = 3  # Microsoft platform
-            table.platEncID = 1   # Unicode encoding
-            table.language = 0    # Default language
-            table.cmap = {}
-            ttFont['cmap'].tables.append(table)
-
-            bs = BytesIO() ; ttFont.save(bs) ; bs.seek(0)
-            ttf = bs.read()
-        
-        return ttf
-
     # -------------------------------------------------------------------------------- read_ttf_otf_info()
 
-    def read_ttf_otf_info(self):
+    @staticmethod
+    def read_ttf_otf_info(font:bytes):
         '''
+        Returns font info as a dictionary.
+        The `ttf` argument is any TrueType/OpenType font as a bytes string.
         '''
-        assert bool(self.ttf) ^ bool(self.otf)
-
-        ttFont = TTFont(BytesIO(self.ttf or self.otf))
+        ttFont = TTFont(BytesIO(font))
 
         # Add an empty (3,1) i.e. (Microsoft, Unicode) encoding table to the font's `cmap` if it is missing.
         # Without this table using a TrueType font is a pain.
@@ -454,29 +493,41 @@ class PdfFont:
             except: warn(f'failed to get from gname2width font: {fontName}')
         
         if cmap := ttFont.get('cmap'):
-            info['isSymbolic'] = any(table.platformID == 3 and table.platEncID == 0 for table in cmap.tables)
-            info['unicode2gname'] = ttFont.getBestCmap()
+            combo = lambda table: (table.platformID, table.platEncID)
+            info['isSymbolic'] = any(combo(table) == (3,0) for table in cmap.tables)
+            for table in cmap.tables:
+                m = {chr(code):gname for code,gname in table.cmap.items()}
+                if combo(table) == (1,0): info['cmap10'] = m
+                if combo(table) == (3,1): info['cmap30'] = m
+
+            # info['unicode2gname'] = ttFont.getBestCmap()
+
+        # if re.search('MBBIVI', info['FontName']):
+        #     ttFont.save('dump.ttf')
+        #     pprint(info)
+        #     sys.exit()
 
         # Return the result
         return info
 
     # -------------------------------------------------------------------------------- read_cff_info()
 
-    def read_cff_info(self):
+    @staticmethod
+    def read_cff_info(cff:bytes):
         '''
         '''
-        assert self.cff != None
+        assert cff
 
         info = {}
 
         # Parse the CFF data
-        cff = CFFFontSet()
-        cff.decompile(file = BytesIO(self.cff), otFont = TTFont())
+        cffFont = CFFFontSet()
+        cffFont.decompile(file = BytesIO(cff), otFont = TTFont())
 
         # Access the first font in the CFF font set
-        assert len(cff.fontNames) == 1
-        info['FontName'] = cff.fontNames[0]
-        font = cff[0]
+        assert len(cffFont.fontNames) == 1
+        info['FontName'] = cffFont.fontNames[0]
+        font = cffFont[0]
 
         # Presence of ROS means a CID-encoded CFF font
         info['ROS'] = font.ROS if hasattr(font, 'ROS') else None
@@ -523,55 +574,16 @@ class PdfFont:
         try: info['StemV'] = font.Private.rawDict.get('StdVW', 100)
         except: info['StemV'] = 100
 
-        # ................................................................................ DEBUG 
-
-        # print('DEBUG:', 'chars.keys()', chars.keys())
-        # print('-'*70)
-        # print('DEBUG:', 'gid2gname', info['gid2gname'])
-
-        # # Dump XML
-        # from fontTools.misc.xmlWriter import XMLWriter
-        # font.toXML(XMLWriter(f'__{info["FontName"]}.xml'))
-        # open(f'__{info["FontName"]}.cff','wb').write(self.cff)
-
-        # info['FontBBox'] = font.rawDict.get('FontBBox', None)
-        # info['FontBBox'] = font.rawDict.get('FontBBox', None)
-        # info['FontBBox'] = font.rawDict.get('FontBBox', None)
-
-        # print('-'*70)
-        # print(info)
-
-        # pprint(info)
-        # pprint(font.rawDict)
-        # print(dir(font))
-        # print(font.FDArray.items[0].Private.rawDict)
-        # print(font.getGlyphOrder())
-        # if re.search('VXUWDK', self.get_font_name()):
-        #     print(cff.fontNames)
-        #     print('***** dir(font)', dir(font))
-        #     print('***** font.rawDict', font.rawDict)
-        #     from fontTools.misc.xmlWriter import XMLWriter
-        #     print('***** toXML()', font.toXML(XMLWriter('__debug.xml')))
-        #     print('***** getGlyphOrder()', font.getGlyphOrder())
-        #     print('***** topDictIndex', dir(cff.topDictIndex))
-        #     print('***** strings', dir(cff.strings))
-        #     open('__sample.cff','wb').write(self.cff)
-        #     sys.exit()
-
         # Return info
         return info
-    
-    # -------------------------------------------------------------------------------- read_core14()
 
-    def read_core14(self):
+    # -------------------------------------------------------------------------------- read_core14_info()
+
+    @staticmethod
+    def read_core14_info(fontName:str):
         '''
         '''
-        assert not self.is_embedded()
-
-        info = {}
-
-        fontName = self.get_font_name()
-        info['FontName'] = fontName
+        info = {'FontName':fontName}
 
         # gid2gname
         baseEncodingName = PdfFontCore14.built_in_encoding(fontName)
@@ -585,6 +597,190 @@ class PdfFont:
             info['gname2width'] = {name[1:]:width for name,width in name2width.items()}
 
         return info
+
+    # -------------------------------------------------------------------------------- fix_ttf_font()
+
+    @staticmethod
+    def fix_ttf_font(font:bytes):
+        '''
+        Adds an empty (3,1) cmap to the TTF font
+        When such font is then used in a PDF this essentially mean "cid == gid" internal encoding
+        '''
+
+        ttFont = TTFont(BytesIO(font))
+        tableIDs = [(table.platformID, table.platEncID) for table in ttFont['cmap'].tables]
+
+        if (3,1) not in tableIDs:
+
+            msg(f'Adding an empty (3,1) cmap sub-table to the TTF font')
+
+            table = CmapSubtable.newSubtable(4)
+            table.platformID = 3  # Microsoft platform
+            table.platEncID = 1   # Unicode encoding
+            table.language = 0    # Default language
+            table.cmap = {}
+            ttFont['cmap'].tables.append(table)
+
+            bs = BytesIO() ; ttFont.save(bs) ; bs.seek(0)
+            font = bs.read()
+        
+        return font
+
+    # -------------------------------------------------------------------------------- print_xml()
+
+    @staticmethod
+    def print_xml(cff:CFFFontSet):
+        '''
+        '''
+        from fontTools.misc.xmlWriter import XMLWriter
+        print('***** toXML()', cff.toXML(XMLWriter('__debug.xml')))
+
+
+# =========================================================================== class PdfFont
+
+class PdfFont:
+    '''
+    '''
+
+    __fontNameCache = {} # a map from id(fontDict) to its consecutive number; needed to number unnamed Type3 fonts
+
+    # -------------------------------------------------------------------------------- __init__()
+
+    def __init__(self,
+                 pfb:bytes = None,
+                 cff:bytes = None,
+                 ttf:bytes = None,
+                 otf:bytes = None,
+                 font:PdfDict = None,
+                 cc2gname:dict = None,
+                 cc2unicode:dict = None,
+                 force_CID:bool = False,
+                 glyphMap:PdfFontGlyphMap = PdfFontGlyphMap(),
+                 quiet:bool = False,
+                 extractFontProgram:bool = True,
+                 makeSyntheticCmap:bool = True):
+        '''
+        Creates an instance of PdfFont from a PFB(PFA)/CFF/TTF/OTF font file (bytes),
+        or from a PDF font dictionary object (PdfDict).
+        '''
+
+        self.pfb = pfb
+        self.cff = cff
+        self.ttf = ttf
+        self.otf = otf
+
+        self.font = font
+
+        self.glyphMap = glyphMap
+
+        self.info = {}
+
+        if self.pfb:
+ 
+            self.info = PdfFontFile.read_pfb_info(self.pfb)
+            self.encoding = self.make_encoding(cc2gname = cc2gname, cc2unicode = cc2unicode)
+            self.font = self.make_font_dict(encoding = self.encoding, force_CID = force_CID)
+ 
+        elif self.cff:
+
+            self.info = PdfFontFile.read_cff_info(self.cff)
+            self.encoding = self.make_encoding(cc2gname = cc2gname, cc2unicode = cc2unicode)
+            self.font = self.make_font_dict(encoding = self.encoding, force_CID = force_CID)
+
+        elif self.ttf or self.otf:
+
+            self.info = PdfFontFile.read_ttf_otf_info(self.ttf or self.otf)
+            self.encoding = self.make_encoding(cc2gname = cc2gname, cc2unicode = cc2unicode)
+            self.font = self.make_font_dict(encoding = self.encoding, force_CID = force_CID)
+ 
+        elif self.font:
+
+            if extractFontProgram:
+
+                isSymbolic = PdfFontDictFunc.is_symbolic(self.font)
+
+                if self.font.Subtype == '/TrueType':
+                    # PDF Ref. v1.7 sec. 5.5.5: Encodings for TrueType Fonts
+                    assert self.font.Encoding in ['/MacRomanEncoding', '/WinAnsiEncoding', None]
+                    assert (self.font.Encoding is not None) ^ isSymbolic
+
+                self.extract_font_program()
+
+                self.info = self.read_pfb_info() if self.pfb \
+                                else PdfFontFile.read_ttf_otf_info(self.ttf or self.otf) if (self.ttf or self.otf) \
+                                else PdfFontFile.read_cff_info(self.cff) if self.cff \
+                                else PdfFontFile.read_core14_info(self.get_font_name())
+
+            self.encoding = self.get_cid_encoding_from_type0_font() if self.is_cid() \
+                                else PdfFontEncoding(font = self.font, fontInfo = self.info)
+
+        else:
+
+            raise ValueError(f'at least one of the arguments must be specified: pfb/cff/ttf/otf/font')
+
+        # Set font name
+        self.name = self.get_font_name()
+
+        # Set chars widths
+        self.widthMissing = PdfFontDictFunc.get_missingWidth(self.font)
+        self.cc2width = self.get_cc2width_from_font()
+
+        # Set fontMatrix
+        self.fontMatrix = MAT(self.font.FontMatrix) if self.font.FontMatrix != None \
+                            else MAT([0.001, 0, 0, 0.001, 0, 0])
+        
+        # Set font's bounding box
+        if self.font.Subtype == '/Type3':
+            self.bbox = self.get_type3_bbox()
+        else:
+            try: self.bbox = BOX(self.get_font_descriptor().FontBBox)
+            except: self.bbox = BOX([0, 0, 1000, 1000])
+            if self.bbox[2] == self.bbox[0] or self.bbox[3] == self.bbox[1]:
+                warn(f'bad FontDescriptor.FontBBox {self.bbox} for font {self}; setting to [0,0,1000,1000]')
+                self.bbox = BOX([0,0,1000,1000])
+
+        # Set cmap_toUnicode (read from the font's ToUnicode dict)
+        self.cmap_toUnicode = None
+        if self.font.ToUnicode:
+            try: self.cmap_toUnicode = PdfFontCMap(toUnicodeDict = self.font.ToUnicode) # /ToUnicode may be junk
+            except: pass
+            if self.cmap_toUnicode == None: warn(f'failed to read ToUnicode CMap for font: {self.name}')
+
+        # An internal Unicode map (read from the font program)
+        self.cmap_internal = None
+        cid2unicode = self.get_cid2unicode(self.encoding)
+        if cid2unicode and len(cid2unicode) > 0:
+            self.cmap_internal = PdfFontCMap()
+            self.cmap_internal.cc2unicode = cid2unicode
+            self.cmap_internal.reset_unicode2cc()
+
+        # Set cmap_synthetic: infer Unicode points based on glyph names using glyphMap
+        self.cmap_synthetic = None
+        if makeSyntheticCmap:
+            self.cmap_synthetic = self.glyphMap.make_cmap(encoding = self.encoding, quiet = quiet)
+            if self.cmap_synthetic and len(self.cmap_synthetic.cc2unicode) == 0:
+                self.cmap_synthetic = None
+
+        # Set the aggregated version of cmap which combines all 3 versions above
+        self.cmap = PdfFontCMap()
+        self.cmap.cc2unicode = (self.cmap_synthetic.cc2unicode if self.cmap_synthetic else {}) \
+                                | (self.cmap_internal.cc2unicode if self.cmap_internal else {}) \
+                                | (self.cmap_toUnicode.cc2unicode if self.cmap_toUnicode else {})
+        self.cmap.reset_unicode2cc()
+
+
+        # spaceWidth is only needed by the class PdfState to regenerate spaces when extracting text
+        self.spaceWidth = self.cc2width.get(self.cmap.unicode2cc.get(' ', None),0)
+        if self.spaceWidth == 0:
+            w = [v for v in self.cc2width.values() if v != 0]
+            averageWidth = sum(w)/ len(w) if len(w) > 0 else 1
+            self.spaceWidth = averageWidth
+
+        # if re.search('KozMin', self.name):
+        #     print('DEBUG')
+        #     pprint(self.font)
+        #     sys.exit()
+
 
     # -------------------------------------------------------------------------------- make_encoding()
 
@@ -611,33 +807,6 @@ class PdfFont:
         encoding.name = [None, PdfName('Differences')]
 
         return encoding
-
-    # -------------------------------------------------------------------------------- get_cidset()
-
-    def get_cidset(self):
-        '''
-        Returns a CIDSet of a CID font as a list of chars, or None if it does not exist
-        '''
-        assert self.is_cid()
-        CIDSet = self.font.DescendantFonts[0].FontDescriptor.CIDSet
-        if CIDSet:
-            byteStream = py23_diffs.convert_store(PdfFilter.uncompress(CIDSet).stream)
-            return [chr(i*8 + j) for i,byte in enumerate(byteStream) for j,bit in enumerate(f'{byte:08b}') if bit == '1']
-        else:
-            return None
-
-    # -------------------------------------------------------------------------------- get_cidtogidmap()
-
-    def get_cidtogidmap(self):
-        '''
-        '''
-        assert self.is_cid()
-        CIDToGIDMap = self.font.DescendantFonts[0].CIDToGIDMap
-        if CIDToGIDMap and isinstance(CIDToGIDMap, PdfDict):
-            b = py23_diffs.convert_store(PdfFilter.uncompress(CIDToGIDMap).stream)
-            return {chr(i):chr(b[2*i]*256 + b[2*i+1]) for i in range(len(b) // 2)}
-        else:
-            return None
 
     # -------------------------------------------------------------------------------- get_cid_encoding_from_font()
 
@@ -680,59 +849,6 @@ class PdfFont:
         encoding.reset_glyphname2cc()
 
         return encoding
-
-    # # -------------------------------------------------------------------------------- get_cid2gid_from_font()
-
-    # def get_cid2gid_from_font(self):
-    #     '''
-    #     '''
-    #     assert self.font
-    #     font = self.font
-    #     if font.Subtype != '/Type0':
-
-    #         gid2gname = self.info.get('gid2gname')
-    #         if not gid2gname: return None
-
-    #         cid2gid = {gid:gid for gid in gid2gname}
-
-    #         gname2gid = {gname:gid for gid,gname in gid2gname.items()}
-    #         encoding = PdfFontEncoding(font = font)
-    #         cid2gid = cid2gid | {cc:gname2gid.get(gname[1:],0) for cc,gname in encoding.cc2glyphname.items()}
-
-    #         # if font.BaseFont and re.search(r'sfrm1095', font.BaseFont.lower()):
-    #         #     pprint(gid2gname)
-    #         #     # pprint(encoding.cc2glyphname)
-    #         #     print(bool(self.pfb), bool(self.ttf))
-
-    #         return cid2gid
-
-    #     else:
-    #         CIDToGIDMap = self.font.DescendantFonts[0].CIDToGIDMap
-    #         if CIDToGIDMap and isinstance(CIDToGIDMap, PdfDict):
-    #             b = py23_diffs.convert_store(PdfFilter.uncompress(CIDToGIDMap).stream)
-    #             return {chr(i):chr(b[2*i]*256 + b[2*i+1]) for i in range(len(b) // 2)}
-    #         else:
-    #             assert CIDToGIDMap in [None, '/Identity']
-    #             return {cc:cc for cc in self.get_cc2width_from_font()}
-
-
-    # # -------------------------------------------------------------------------------- get_cid2gid()
-
-    # def get_cid2gid(self):
-    #     '''
-    #     '''
-    #     gid2gname = self.info.get('gid2gname')
-    #     assert gid2gname
-    #     return self.info.get('cid2gid') or {chr(gid):chr(gid) for gid in gid2gname.keys()}
-
-    # # -------------------------------------------------------------------------------- make_cid2gname()
-
-    # def get_cid2gname(self):
-    #     '''
-    #     '''
-    #     gid2gname = self.info.get('gid2gname')
-    #     if not gid2gname: return None
-    #     return {cid:gid2gname.get(gid,'.notdef') for cid,gid in self.get_cid2gid().items()}
 
     # -------------------------------------------------------------------------------- make_cid2unicode()
 
@@ -985,7 +1101,7 @@ class PdfFont:
         '''
         assert self.font != None
 
-        fd = self.get_font_descriptor()
+        fd = PdfFontDictFunc.get_font_descriptor(self.font)
 
         if fd == None: return
 
@@ -1041,7 +1157,7 @@ class PdfFont:
 
     # -------------------------------------------------------------------------------- install()
 
-    def install(self, pdfPage, fontName, overwrite=False):
+    def install(self, pdfPage:PdfDict, fontName:str, overwrite:bool = False):
         '''
         Adds self.font to the pdfPage.Resources.Font dictionary under the name fontName.
         The font can then be referred to using Tf operators in the pdfPage.stream
@@ -1060,7 +1176,7 @@ class PdfFont:
         Checks if the font is a simple font (i.e. if font.Subtype is one of
         '/Type1', '/Type3', '/TrueType', '/MMType1')
         '''
-        return self.font.Subtype in ['/Type1', '/Type3', '/TrueType', '/MMType1']
+        return PdfFontDictFunc.is_simple(self.font)
 
     # -------------------------------------------------------------------------------- is_cid()
 
@@ -1068,63 +1184,23 @@ class PdfFont:
         '''
         Checks if the font is a CID font (i.e. if font.Subtype is '/Type0')
         '''
-        return self.font.Subtype == '/Type0' and not isinstance(self.font.Encoding, PdfDict)
+        return PdfFontDictFunc.is_cid(self.font)
 
-    # -------------------------------------------------------------------------------- get_subtype()
-
-    def get_subtype_string(self):
-        '''
-        '''
-        suffixes = {'/Type1C':'C', '/CIDFontType0C':'C', '/OpenType':'-OpenType'}
-
-        if not self.font: return None
-
-        f = self.font if self.font.Subtype != '/Type0' else self.font.DescendantFonts[0]
-
-        prefix = f.Subtype
-
-        fd = f.FontDescriptor
-        if not fd: return prefix
- 
-        suffix = suffixes.get(fd.FontFile3.Subtype) if fd.FontFile3 else ''
-        return prefix + suffix
-
-    # -------------------------------------------------------------------------------- get_encoding_string()
-
-    def get_encoding_string(self):
-        '''
-        '''
-        if not self.font: return None
-        if not self.is_cid():
-            enc = self.font.Encoding
-            if not isinstance(enc, PdfDict): return enc
-            return [enc.BaseEncoding, '/Differences']
-        else:
-            dFont = self.font.DescendantFonts[0]
-            s = []
-            if dFont.CIDToGIDMap: s.append('/CIDToGIDMap')
-            if dFont.FontDescriptor.CIDSet: s.append('/CIDSet')
-            s = ' + '.join(s)
-            if self.encoding == None: s += ' = None'
-            return None if len(s) == 0 else s
-
-    # -------------------------------------------------------------------------------- get_font_descriptor()
-
-    def get_font_descriptor(self):
-        '''
-        Get the font's descriptor dictionary
-        '''
-        if not self.font: return None
-        return self.font.FontDescriptor if not self.is_cid() else self.font.DescendantFonts[0].FontDescriptor
-    
     # -------------------------------------------------------------------------------- is_embedded()
 
     def is_embedded(self):
         '''
         Checks if the font is embedded
         '''
-        fd = self.get_font_descriptor()
-        return fd != None and (fd.FontFile or fd.FontFile2 or fd.FontFile3)
+        return PdfFontDictFunc.is_embedded(self.font)
+
+    # -------------------------------------------------------------------------------- is_embedded()
+
+    def is_symbolic(self):
+        '''
+        Checks if the font is symbolic
+        '''
+        return PdfFontDictFunc.is_symbolic(self.font)
 
     # -------------------------------------------------------------------------------- decodeCodeString()
 
@@ -1175,23 +1251,6 @@ class PdfFont:
         if s == None: return None
         return sum(self.cc2width.get(cc, self.widthMissing) for cc in s)
 
-    # -------------------------------------------------------------------------------- get_missingWidth()
-
-    def get_missingWidth(self):
-        '''
-        Returns the MissingWidth (in document units)
-        '''
-        assert self.font
-        font = self.font
-
-        z = abs(float(font.FontMatrix[0])) if font.FontMatrix != None else 0.001
-        if font.Subtype == '/Type3': return 0
-        elif font.Subtype == '/Type0':
-            return z * float(font.DescendantFonts[0].DW or '0')
-        else:
-            fd = font.FontDescriptor
-            return z * float(fd.MissingWidth or '0') if fd else 0
-
 
     # -------------------------------------------------------------------------------- get_cc2width_from_font()
 
@@ -1227,10 +1286,16 @@ class PdfFont:
                     if cc not in cc2width:
                         cc2width[cc] = missingWidth
 
-            # Exclude code that are actually not in the font
+            # Exclude code that are actually not in the font.
+            # Assumption: whether a code (cc) is in the font is first checked by
+            # mapping to glyph name and looking up the glyph name in the font, and if that
+            # fails then just looking up a symbol in the font with gid equal to cc
             gname2width = self.info.get('gname2width')
-            if gname2width and self.encoding:
-                cc2width = {cc:ww for cc,ww in cc2width.items() if self.encoding.cc2glyphname.get(cc, '/None')[1:] in gname2width}
+            gid2gname = self.info.get('gid2gname')
+            cc2width = {cc:ww for cc,ww in cc2width.items() \
+                        if gname2width and self.encoding.cc2glyphname.get(cc, '/None')[1:] in gname2width \
+                            or gid2gname and cc in gid2gname \
+                            or gid2gname is None and gname2width is None}
 
         else: # CID fonts
 
@@ -1256,16 +1321,14 @@ class PdfFont:
             # Add default widths to cids whose widths are not explicitly specified
             defaultWidth = int(dFont.DW) if dFont.DW else 1000
 
-            if cid2gid := self.get_cidtogidmap():
+            if cid2gid := PdfFontDictFunc.get_cidtogidmap(self.font):
                 for cc in cid2gid:
                     if cc not in cc2width: cc2width[cc] = defaultWidth
-            elif cidset := self.get_cidset():
+            elif cidset := PdfFontDictFunc.get_cidset(self.font):
                 for cc in cidset:
                     if cc not in cc2width: cc2width[cc] = defaultWidth
 
             # elif gid2gname := self.info.get('gid2gname'):
-            #     if re.search('Cambria', self.font.DescendantFonts[0].BaseFont):
-            #         pprint(self.font)
             #     for cc in gid2gname:
             #         if cc not in cc2width: cc2width[cc] = defaultWidth
 
@@ -1283,7 +1346,9 @@ class PdfFont:
         '''
         A string representation of a font
         '''
-        return f'{self.get_subtype_string():14s} {self.name} {self.get_encoding_string()}'
+        subtype = PdfFontDictFunc.get_subtype_string(self.font)
+        encoding = PdfFontDictFunc.get_encoding_string(self.font)
+        return f'{subtype:14s} {self.name} {encoding}'
 
     # -------------------------------------------------------------------------------- fontTableToPdfPages()
 
@@ -1439,7 +1504,9 @@ class PdfFont:
             if self.info.get('unicode2gname'):
                 ToUnicode += ', internal Unicode CMap'
             Embedded = '' if self.is_embedded() else ', Not embedded'
-            subtitle = f'{self.get_subtype_string()}, Encoding: {self.get_encoding_string()}{ToUnicode}{Embedded}'
+            subtype = PdfFontDictFunc.get_subtype_string(self.font)
+            encoding = PdfFontDictFunc.get_encoding_string(self.font)
+            subtitle = f'{subtype}, Encoding: {encoding}{ToUnicode}{Embedded}'
             stream  = f'1 0 0 1 40 320 cm BT\n'
             stream += f'1 0 0 1 -10 40 Tm /C 10 Tf ({title}) Tj\n'
             stream += f'1 0 0 1 -10 30 Tm /C 6 Tf ({subtitle}) Tj\n'
@@ -1462,44 +1529,6 @@ class PdfFont:
             pages.append(make_page_template(0))
  
         return pages
-
-    # -------------------------------------------------------------------------------- get_type3_bbox()
-
-    def get_type3_bbox(self):
-        '''
-        '''
-        from pdfrwx.pdffilter import PdfFilter
-        from pdfrwx.pdfstreamparser import PdfStream
-
-        get_bbox = lambda cmd: BOX([0, 0, cmd[1][0], cmd[1][0]]) if cmd[0] == 'd0' \
-                                    else BOX(cmd[1][2:6]) if cmd[0] == 'd1' else None
-
-        isValid = lambda bbox: bbox[2] != bbox[0] and bbox[3] != bbox[1]
-
-        font = self.font
-        assert font.Subtype == '/Type3'
-
-        bbox = None
-
-        if font.FontBBox:
-            bbox = BOX([float(x) for x in font.FontBBox])
-            if isValid(bbox): return bbox
-
-        for gname,proc in font.CharProcs.items():
-
-            stream = PdfFilter.uncompress(proc).stream
-            tree = PdfStream.stream_to_tree(stream)
-
-            proc_bbox = get_bbox(tree[0])
-            if proc_bbox == None:
-                err(f'Font: {font}\nGlyph ({gname}) process stream has no d0/d1 operator:\n{proc.stream}')
-            bbox = bbox + proc_bbox if bbox != None else proc_bbox
-
-        if not isValid(bbox):
-            warn(f'bad Type3 bbox: {bbox}, font: {font}')
-            bbox = BOX([0,0,1,1])
-
-        return bbox
 
     # -------------------------------------------------------------------------------- subset()
 
