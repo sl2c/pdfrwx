@@ -247,7 +247,7 @@ class PdfFontGlyphMap:
     def strip_dot_endings(s:str):
         '''Strips ._, .sc & .cap endings from a string; useful to match variants (small caps etc) of glyph names in glyph lists
         '''
-        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|disp|big|small|ts1|lf|swash))+$','', s)
+        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|vsize[0-9]*|hsize[0-9]*|disp|big|small|ts1|lf|tf|swash))+$','', s)
         s1 = re.sub(r'\\rm', '', s1)
         return s1 if len(s1)>1 else s
 

@@ -65,7 +65,7 @@ class Group4Decoder(object):
     MAKEUP_LOW_BLACK_DECODE = {v:(k+1)*64 for k,v in enumerate(MAKEUP_LOW_BLACK_ENCODE)}
 
     MAKEUP_HIGH_ENCODE = [
-        '00000001000','00000001100','00000001001','000000010010','000000010011','000000010100','000000010101','000000010110',
+        '00000001000','00000001100','00000001101','000000010010','000000010011','000000010100','000000010101','000000010110',
         '000000010111','000000011100','000000011101','000000011110','000000011111'
     ]
     MAKEUP_HIGH_DECODE = {v:(k + 28)*64 for k,v in enumerate(MAKEUP_HIGH_ENCODE)}
@@ -83,17 +83,22 @@ class Group4Decoder(object):
         with ends of lines padded with 0-bits to whole bytes, if necessary.
         '''
 
-        def dump(outBits:str, Columns:int, a0:int, line:int, message:str):
+        MODES = self.MODES_DECODE
+        WHITE, BLACK = 0, 1
+
+        peek = lambda i: inBits[inPos:inPos+i]
+        getBit = lambda color: '0' if color == WHITE else '1'
+
+        def dump(inBits:str, outBits:str, Columns:int, a0:int, line:int, message:str):
             nBytes = (Columns + 7 ) // 8
             if a0 < nBytes * 8:
                 outBits += '0' * (nBytes * 8 - a0)
             from PIL import Image, ImageChops
             pil = Image.frombytes('1',(Columns, line+1), toBytes(outBits))
             ImageChops.invert(pil).save('dump.tif')
-            raise ValueError(message + '\n' + 'salvaged parts of the image written to dump.tif')
-
-        MODES = self.MODES_DECODE
-        WHITE, BLACK = 0, 1
+            message += f'\nline = {line}, a0 = {a0}, peek = {peek(24)}'
+            message += '\nsalvaged parts of the image written to dump.tif'
+            raise ValueError(message)
 
         toBytes = lambda bits: b''.join(int(bits[i:i+8],2).to_bytes(1,'big') for i in range(0,len(bits),8))
 
@@ -101,8 +106,6 @@ class Group4Decoder(object):
         inBits = ''.join(f'{d:08b}' for d in data)
         inPos = 0
         outBits = ''
-        peek = lambda i: inBits[inPos:inPos+i]
-        getBit = lambda color: '0' if color == WHITE else '1'
 
         b = []
         a = []
@@ -132,8 +135,18 @@ class Group4Decoder(object):
                         a0 = b2
                     elif l == 'HOR':
                         # Horizontal mode
-                        M01, inPos = self.get_run_length(inBits, inPos, color)
-                        M12, inPos = self.get_run_length(inBits, inPos, color^1)
+                        try:
+                            M01, inPos = self.get_run_length(inBits, inPos, color)
+                        except:
+                            clr = 'white' if color == WHITE else 'black'
+                            dump(inBits, outBits, Columns, a0, line, f'failed to get 1st ({clr}) run length')
+
+                        try:
+                            M12, inPos = self.get_run_length(inBits, inPos, color^1)
+                        except:
+                            clr = 'black' if color == WHITE else 'white'
+                            dump(inBits, outBits, Columns, a0, line, f'failed to get 2nd ({clr}) run length')
+
                         outBits += getBit(color)*M01 + getBit(color^1)*M12
                         a1, a2 = a0 + M01, a0 + M01 + M12
                         a.append(a1); a.append(a2)
@@ -155,14 +168,14 @@ class Group4Decoder(object):
             if l is None:
 
                 if peek(24) != self.EOFB:
-                    dump(outBits, Columns, a0, line, f'unrecognized bits at line = {line}, a0 = {a0}: {peek(24)}')
+                    dump(inBits, outBits, Columns, a0, line, f'unrecognized bits')
 
                 if res := len(outBits) % 8:
                     outBits += '0'*(8-res)
                 return toBytes(outBits)
 
             if a0 > Columns:
-                dump(outBits, Columns, a0, line, f'extra bits at line = {line}, a0 = {a0}')
+                dump(inBits, outBits, Columns, a0, line, f'extra bits at the end of line')
             
             if a0 == Columns:
                 a0 = -1

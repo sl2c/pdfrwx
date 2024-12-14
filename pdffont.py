@@ -16,10 +16,11 @@ from pdfrwx.pdffontcore14 import PdfFontCore14
 from pdfrwx.pdffontcmap import PdfFontCMap
 from pdfrwx.pdffilter import PdfFilter
 from pdfrwx.pdfgeometry import VEC, MAT, BOX
+from pdfrwx.pdfobjects import PdfObjects
 
 # fontLib
 try:
-    from fontTools.ttLib import TTFont
+    from fontTools.ttLib import TTFont, newTable
     from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
     from fontTools.t1Lib import T1Font, writePFB
     from fontTools.cffLib import CFFFontSet
@@ -200,6 +201,16 @@ class PdfFontDictFunc:
 
         return isSymbolic
 
+    # -------------------------------------------------------------------------------- get_font_name()
+
+    @staticmethod
+    def get_font_name(font:PdfDict):
+        '''
+        Returns font's name: `font.Name` for a Type3 font and `font.BaseFont` for all others.
+        Note that a font may have no name, in which case `None` is returned.
+        '''
+        return font.Name if font.Subtype == '/Type3' else font.BaseFont
+
     # -------------------------------------------------------------------------------- get_font_descriptor()
 
     @staticmethod
@@ -299,7 +310,17 @@ class PdfFontDictFunc:
     @staticmethod
     def get_subtype_string(font:PdfDict):
         '''
-        String representation of the font's Subtype
+        Returns `subtype + suffix` where `subtype` is one of:
+        
+        `/Type1, /TrueType, /CIDFontType0, /CIDFontType2`
+
+        and suffix is:
+        
+        - `'C'` if `FontFile3.Subtype` is `/Type1C` or `/CIDFontType0C`;
+        - `'-OpenType'` if `FontFile3.Subtype` is `/OpenType`;
+        - absent if `FontFile3` font program is absent.
+        
+        See PDF Ref. v1.7 sec. 5.8, table 5.23.
         '''
         suffixes = {'/Type1C':'C', '/CIDFontType0C':'C', '/OpenType':'-OpenType'}
 
@@ -307,13 +328,8 @@ class PdfFontDictFunc:
 
         f = font if font.Subtype != '/Type0' else font.DescendantFonts[0]
 
-        prefix = f.Subtype
-
-        fd = f.FontDescriptor
-        if not fd: return prefix
- 
-        suffix = suffixes.get(fd.FontFile3.Subtype) if fd.FontFile3 else ''
-        return prefix + suffix
+        try: return f.Subtype + suffixes.get(f.FontDescriptor.FontFile3.Subtype)
+        except: return f.Subtype
 
     # -------------------------------------------------------------------------------- get_encoding_string()
 
@@ -393,8 +409,7 @@ class PdfFontFile:
         for char in chars.values(): char.draw(NullPen())
 
         # Set the maps
-        # info['gid2gname'] = {chr(i):gname for i,gname in enumerate(chars.keys())}
-        info['gid2gname'] = {chr(i):gname for i,gname in enumerate(t1.font['Encoding']) if gname != '.notdef'}
+        info['gid2gname'] = {i:gname for i,gname in enumerate(t1.font['Encoding']) if gname != '.notdef'}
         info['gname2width'] = {gname:chars[gname].width for gname in chars.keys()}
 
         # Return info
@@ -487,7 +502,7 @@ class PdfFontFile:
             warn(f'failed to get glyphSet from font: {fontName}')
 
         if glyphSet is not None:
-            try: info['gid2gname'] = {chr(ttFont.getGlyphID(gname)):gname for gname in glyphSet}
+            try: info['gid2gname'] = {ttFont.getGlyphID(gname):gname for gname in glyphSet}
             except: warn(f'failed to get gid2gname from font: {fontName}')
             try: info['gname2width'] = {gname:glyphSet[gname].width * z for gname in glyphSet}
             except: warn(f'failed to get from gname2width font: {fontName}')
@@ -500,7 +515,7 @@ class PdfFontFile:
                 if combo(table) == (1,0): info['cmap10'] = m
                 if combo(table) == (3,1): info['cmap30'] = m
 
-            # info['unicode2gname'] = ttFont.getBestCmap()
+            info['unicode2gname'] = ttFont.getBestCmap()
 
         # if re.search('MBBIVI', info['FontName']):
         #     ttFont.save('dump.ttf')
@@ -509,6 +524,37 @@ class PdfFontFile:
 
         # Return the result
         return info
+
+    # -------------------------------------------------------------------------------- merge_cff_font_sets()
+
+    @staticmethod
+    def merge_cff_font_sets(cffFont1:CFFFontSet, cffFont2:CFFFontSet):
+        '''
+        Attempts to merge two CFF fonts. If the fonts are compatible, cffFont2 is updated with entries
+        from cffFont1, and the function returns True; otherwise, the two fonts are unchanged and
+        the function returns False.
+        '''
+        cs1 = cffFont1[0].CharStrings
+        cs2 = cffFont2[0].CharStrings
+
+        for s in cs1.values(): s.compile()
+        for s in cs2.values(): s.compile()
+
+        # check compatibility
+        if any(gname in cs2.keys() and cs1[gname].bytecode != cs2[gname].bytecode for gname in cs1.keys()):
+            return False
+
+        # check non-zero overlap
+        if not any(gname in cs2.keys() for gname in cs1.keys()):
+            return False
+        
+        # update cffFont2 with entries from cffFont1
+        for gname in cs1.keys():
+            if gname not in cs2.keys():
+                cs2[gname] = cs1[gname]
+                cffFont2[0].charset.append(gname)
+
+        return True
 
     # -------------------------------------------------------------------------------- read_cff_info()
 
@@ -542,10 +588,10 @@ class PdfFontFile:
 
         # gid2gname
         if info['ROS']:
-            info['gid2gname'] = {chr(int(gname[3:]) if gname != '.notdef' else 0):gname for gname in chars.keys()}
+            info['gid2gname'] = {(int(gname[3:]) if gname != '.notdef' else 0):gname for gname in chars.keys()}
         else:
             try:
-                info['gid2gname'] = {chr(i):gname for i,gname in enumerate(font.Encoding) if gname != '.notdef'}
+                info['gid2gname'] = {i:gname for i,gname in enumerate(font.Encoding) if gname != '.notdef'}
             except:
                 warn(f'CFF font has no CharStrings: {info["FontName"]}')
                 info['gid2gname'] = {}
@@ -589,7 +635,7 @@ class PdfFontFile:
         baseEncodingName = PdfFontCore14.built_in_encoding(fontName)
         if baseEncodingName:
             baseEncoding = PdfFontEncoding(name = baseEncodingName)
-            info['gid2gname'] = {cc:gname[1:] for cc,gname in baseEncoding.cc2glyphname.items()}
+            info['gid2gname'] = {ord(cc):gname[1:] for cc,gname in baseEncoding.cc2glyphname.items()}
 
         # gname2width
         name2width = PdfFontCore14.make_name2width(fontName)
@@ -629,12 +675,15 @@ class PdfFontFile:
     # -------------------------------------------------------------------------------- print_xml()
 
     @staticmethod
-    def print_xml(cff:CFFFontSet):
+    def cff_to_xml(cff:bytes, filePath:str):
         '''
+        Writes a CFF font program to file.
         '''
         from fontTools.misc.xmlWriter import XMLWriter
-        print('***** toXML()', cff.toXML(XMLWriter('__debug.xml')))
-
+        ttFont = TTFont()
+        cffFont = CFFFontSet()
+        cffFont.decompile(file = BytesIO(cff), otFont = ttFont)
+        cffFont.toXML(XMLWriter(filePath))
 
 # =========================================================================== class PdfFont
 
@@ -706,7 +755,7 @@ class PdfFont:
 
                 self.extract_font_program()
 
-                self.info = self.read_pfb_info() if self.pfb \
+                self.info = PdfFontFile.read_pfb_info(self.pfb) if self.pfb \
                                 else PdfFontFile.read_ttf_otf_info(self.ttf or self.otf) if (self.ttf or self.otf) \
                                 else PdfFontFile.read_cff_info(self.cff) if self.cff \
                                 else PdfFontFile.read_core14_info(self.get_font_name())
@@ -731,7 +780,7 @@ class PdfFont:
         
         # Set font's bounding box
         if self.font.Subtype == '/Type3':
-            self.bbox = self.get_type3_bbox()
+            self.bbox = PdfFontDictFunc.get_type3_bbox(self.font)
         else:
             try: self.bbox = BOX(self.get_font_descriptor().FontBBox)
             except: self.bbox = BOX([0, 0, 1000, 1000])
@@ -798,7 +847,7 @@ class PdfFont:
             cc2gname = {cc:unicode2gname[ord(u)] for cc,u in cc2unicode.items() if ord(u) in unicode2gname}
         
         if not cc2gname:
-            cc2gname = self.info['gid2gname']
+            cc2gname = {chr(gid):gname for gid, gname in self.info['gid2gname'].items()}
 
  
         encoding = PdfFontEncoding()
@@ -826,26 +875,28 @@ class PdfFont:
         gid2gname = self.info.get('gid2gname')
         if not gid2gname: return None
 
-        # Get cid2gid
-        cid2gid = self.get_cidtogidmap()
+        # Get cid2gid (str -> str)
+        cid2gid = PdfFontDictFunc.get_cidtogidmap(self.font)
         if not cid2gid:
             cid2gid = {cc:cc for cc in self.get_cc2width_from_font()}
 
         # Append cids from CIDSet if it exists
-        CIDSet = self.get_cidset()
+        CIDSet = PdfFontDictFunc.get_cidset(self.font)
         if CIDSet:
             for cid in CIDSet:
                 if cid not in cid2gid: cid2gid[cid] = cid
 
-        # msg(f'{self.get_font_name()}: cc2width --> encoding')
+        if len(cid2gid) == 0:
+            name = self.font.BaseFont or self.DescendantFonts[0].BaseFont
+            cid2gid = {chr(gid):chr(gid) for gid in gid2gname}
 
         # Create cid2gname
-        cid2gname = {cid:gid2gname.get(gid,'.notdef') for cid,gid in sorted(cid2gid.items())}
+        cc2gname = {cid:gid2gname.get(ord(gid),'.notdef') for cid,gid in sorted(cid2gid.items())}
 
         # Create encoding
         encoding = PdfFontEncoding()
         encoding.name = PdfName('CIDEncoding')
-        encoding.cc2glyphname = {cc:PdfName(gname) for cc,gname in cid2gname.items()}
+        encoding.cc2glyphname = {cc:PdfName(gname) for cc,gname in cc2gname.items()}
         encoding.reset_glyphname2cc()
 
         return encoding
@@ -865,11 +916,14 @@ class PdfFont:
 
     # -------------------------------------------------------------------------------- get_cid2width()
 
-    def get_cid2width(self, encoding:PdfFontEncoding = None):
+    def get_cid2width_from_info(self, encoding:PdfFontEncoding = None):
         '''
+        Get a map form CIDs to widths (int -> float) from self.info
         '''
-        cid2gname = {cid:gname[1:] for cid,gname in encoding.cc2glyphname.items()} if encoding \
-                        else {gid:gid for gid in self.info['gid2gname'].items()}
+        if encoding:
+            cid2gname = {ord(cc):gname[1:] for cc,gname in encoding.cc2glyphname.items()}
+        else:
+            cid2gname = self.info['gid2gname']
         gname2width = self.info['gname2width']
         return {cid:gname2width.get(gname,0) for cid,gname in cid2gname.items()}
 
@@ -877,9 +931,9 @@ class PdfFont:
 
     def make_font_dict(self, encoding:PdfFontEncoding = None, force_CID:bool = False):
 
-        # ................................................................................ get_flags()
+        # ................................................................................ make_flags()
 
-        def get_flags(info:dict):
+        def make_flags(info:dict):
             '''
             Calculates the `Flags` bit field.
             '''
@@ -957,7 +1011,7 @@ class PdfFont:
 
         elif self.ttf: # Make FontFile2
 
-            fontProgram = PdfFont.fix_ttf_font(self.ttf)
+            fontProgram = PdfFontFile.fix_ttf_font(self.ttf)
  
             FontFile2 = IndirectPdfDict(
                 Length1 = len(fontProgram),
@@ -984,7 +1038,7 @@ class PdfFont:
         FontDescriptor = IndirectPdfDict(
             Type = PdfName('FontDescriptor'),
             FontName = PdfName(FontName),
-            Flags = get_flags(self.info),
+            Flags = make_flags(self.info),
             # FontBBox = PdfArray(self.info['FontBBox']),
             FontBBox = PdfArray(bbox),
             ItalicAngle = self.info['ItalicAngle'],
@@ -1019,14 +1073,14 @@ class PdfFont:
                 CIDToGIDMap = None
             else:
                 gname2gid = {gname:gid for gid,gname in self.info['gid2gname'].items()}
-                cid2gid = {cid:gname2gid.get(gname[1:],0) for cid,gname in encoding.cc2glyphname.items()}
-                gids = [ord(cid2gid.get(chr(cid),chr(0))) for cid in range(maxCID + 1)]
+                cid2gid = {ord(cc):gname2gid.get(gname[1:],0) for cc,gname in encoding.cc2glyphname.items()}
+                gids = [cid2gid.get(cid,0) for cid in range(maxCID + 1)]
                 CIDToGIDMap = IndirectPdfDict(
                     stream=py23_diffs.convert_load(b''.join(bytes([gid >> 8, gid & 255]) for gid in gids))
                 )
             
             # Widths
-            W = PdfArray([x for cid,w in self.get_cid2width(encoding).items() for x in [ord(cid),PdfArray([w])]])
+            W = PdfArray([x for cid,w in self.get_cid2width_from_info(encoding).items() for x in [cid,PdfArray([w])]])
 
             # CIDFontSubtype; see PDF Ref. Sec. 5.8, Table 5.23 Embedded font organization for various font types
             CIDFontSubtype = PdfName('CIDFontType2') if otfWithGlyf or self.ttf else PdfName('CIDFontType0')
@@ -1071,7 +1125,7 @@ class PdfFont:
 
             Differences, FirstChar, LastChar = PdfFontEncoding.cc2glyphname_to_differences(encoding.cc2glyphname)
 
-            Widths = PdfArray([self.get_cid2width(encoding).get(chr(i),0) for i in range(FirstChar, LastChar+1)])
+            Widths = PdfArray([self.get_cid2width_from_info(encoding).get(i,0) for i in range(FirstChar, LastChar+1)])
 
             fontDict = IndirectPdfDict(
                 Type = PdfName('Font'),
@@ -1134,18 +1188,46 @@ class PdfFont:
                 self.otf = FontProgram
             else:
                 raise ValueError(f'invalid FontFile3.Subtype: {subtype}')
+            
+    
+    # -------------------------------------------------------------------------------- save()
+
+    def save(self, basePath:str = None):
+        '''
+        The basePath arguments is is the intended path to the saved font file without the file's extension.
+        If it's None then the self.name is chosen as the file name, and the file is saved in the current folder.
+        '''
+        fontProgram = self.pfb or self.ttf or self.otf or self.cff
+        if fontProgram is None:
+            raise ValueError(f'no font program in font: {self.name}')
+        if basePath is None:
+            basePath = self.name[1:]
+        ext = 'pfb' if self.pfb else 'ttf' if self.ttf else 'otf' if self.otf else 'cff' if self.cff else None
+
+        # if ext == 'cff':
+        #     PdfFontFile.cff_to_xml(self.cff, basePath + '.xml')
+        #     return
+
+        open(basePath + '.' + ext, 'wb').write(fontProgram)
+        return
 
     # -------------------------------------------------------------------------------- get_font_name()
 
     def get_font_name(self):
         '''
+        This is a wrapper function around `PdfFontDictFunc.get_font_name()` which does some extra work:
+
+        * if `self.font` doesn't have a name, this function will return `f'/T3Font{N}'`, where `N`
+        is a consecutive integer (note: Type3 font type is the only one that is allowed not to have a name);
+        * if the name of `self.font` has been encountered in previous calls to this function, it will
+        return a "versioned" variant of the name `f'{name}-v{N}'`, where `N` is a consecutive integer.
+
+        Altogether, this ensures that names returned for different fonts never coincide.
         '''
         nDuplicates = lambda d, k: d.get(k) or d.update({k:len(d)+1}) or len(d) # duplicates counter
         f = self.font
 
-        result = f.Name if f.Subtype == '/Type3' \
-            else f.DescendantFonts[0].BaseFont if f.Subtype == '/Type0' and f.DescendantFonts != None \
-            else f.BaseFont
+        result = PdfFontDictFunc.get_font_name(f)
 
         if result not in self.__fontNameCache: self.__fontNameCache[result] = {}
         idx = nDuplicates(self.__fontNameCache[result], id(f))
@@ -1294,7 +1376,7 @@ class PdfFont:
             gid2gname = self.info.get('gid2gname')
             cc2width = {cc:ww for cc,ww in cc2width.items() \
                         if gname2width and self.encoding.cc2glyphname.get(cc, '/None')[1:] in gname2width \
-                            or gid2gname and cc in gid2gname \
+                            or gid2gname and ord(cc) in gid2gname \
                             or gid2gname is None and gname2width is None}
 
         else: # CID fonts
@@ -1328,9 +1410,10 @@ class PdfFont:
                 for cc in cidset:
                     if cc not in cc2width: cc2width[cc] = defaultWidth
 
-            # elif gid2gname := self.info.get('gid2gname'):
-            #     for cc in gid2gname:
-            #         if cc not in cc2width: cc2width[cc] = defaultWidth
+            if len(cc2width) == 0:
+                gid2gname = self.info.get('gid2gname')
+                if gid2gname:
+                    cc2width = {chr(gid):defaultWidth for gid in gid2gname}
 
 
         # Rescale from font units to document units
@@ -1626,6 +1709,44 @@ class PdfFontUtils:
             warn(f'failed to load any font: {fontNames}') ; return None
         self.fontsCache[nameFound] = font
         return font
+
+# ------------------------------------------------------- get_object_fonts()
+
+def get_object_fonts(xobj:PdfDict,
+                        fontTypes:list[str] = None,
+                        regex:str = None):
+    '''
+    Returns a `{id(font):font}` dictionary of fonts used by `xobj` whose Subtypes match those in the `fontTypes` list.
+    Setting `fontTypes = None` has the same effect as setting it to:
+
+    `['/Type1', '/MMType1', '/TrueType', '/Type3', '/Type0']`.
+
+    Example:
+    
+    `get_object_fonts(pdf, fontTypes = ['/Type3']).`
+    
+    If the `regex` argument is provided only the fonts whose names match the regex are selected. Fonts
+    that have no name are always included.
+    '''
+    cache = set()
+
+    fontName = PdfFontDictFunc.get_font_name
+
+    if fontTypes is None:
+        fontTypes = ['/Type1', '/MMType1', '/TrueType', '/Type3', '/Type0']
+
+    fontFilter = lambda obj: \
+        isinstance(obj, PdfDict) \
+        and obj.Type == PdfName.Font \
+        and obj.Subtype in fontTypes \
+        and (regex in [None, '.'] or fontName(obj) is not None and re.search(regex, fontName(obj), re.IGNORECASE))
+
+    if xobj.pages:
+        objectTuples = [t for page in xobj.pages for t in PdfObjects(page, cache=cache)]
+    else:
+        objectTuples = PdfObjects(xobj, cache=cache)
+
+    return {id(obj):obj for name, obj in objectTuples if fontFilter(obj)}
 
 # ============================================================================= main()
 

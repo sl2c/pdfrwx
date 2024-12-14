@@ -28,29 +28,31 @@ class PdfFontEncoding:
         self.baseEncoding = None
 
         gid2gname = fontInfo.get('gid2gname') if fontInfo else None
+        cmap10 = fontInfo.get('cmap10') if fontInfo else None
+        cmap30 = fontInfo.get('cmap30') if fontInfo else None
 
         # self.baseEncoding = '/WinAnsiEncoding'
 
         self.cc2glyphname = {} # A map from character codes (chars) to glyph names
         self.glyphname2cc = {} # A reverse map from glyph names to character codes (chars)
 
+        cc2g = {}
         if name != None:
 
             self.name = name
-            self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(name)
-            if self.cc2glyphname == None: err(f'invalid encoding name: {name}')
+            cc2g = PdfFontEncodingStandards.get_cc2glyphname(name)
+            if cc2g == None: err(f'invalid encoding name: {name}')
 
         if differences != None:
 
             self.name = '[/Differences]'
-            self.cc2glyphname = PdfFontEncoding.differences_to_cc2glyphname(differences)
+            cc2g = PdfFontEncoding.differences_to_cc2glyphname(differences)
 
         if font != None:
 
             assert font.Subtype != '/Type0' # SIMPLE font
 
             self.isType3 = font.Subtype == '/Type3'
-            self.cc2glyphname = {}
 
             fd = font.FontDescriptor
             isEmbedded = fd and (fd.FontFile or fd.FontFile2 or fd.FontFile3)
@@ -74,9 +76,9 @@ class PdfFontEncoding:
                         else None
 
                     if self.baseEncoding:
-                        self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding)
+                        cc2g = PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding)
                     elif gid2gname:
-                        self.cc2glyphname = {gid:PdfName(gname) for gid,gname in gid2gname.items()}
+                        cc2g = {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
 
                 # PDF Ref. v1.7 sec. 5.5.5:
                 # If the Encoding entry is a dictionary, the table is initialized with the entries from the
@@ -88,7 +90,7 @@ class PdfFontEncoding:
 
                 if font.Encoding.Differences != None:
                     differencesMap = PdfFontEncoding.differences_to_cc2glyphname(font.Encoding.Differences)
-                    self.cc2glyphname = self.cc2glyphname | differencesMap
+                    cc2g = cc2g | differencesMap
                     
                 self.name = [font.Encoding.BaseEncoding, '/Differences' if font.Encoding.Differences != None else None]
 
@@ -96,22 +98,29 @@ class PdfFontEncoding:
 
                 self.name = font.Encoding if font.Encoding \
                             else PdfFontCore14.built_in_encoding(font.BaseFont) if not isEmbedded \
-                            else '/TrueType' if font.Subtype == '/TrueType' \
+                            else '/Built-In' if font.Subtype == '/TrueType' \
                             else None
 
-                if self.name == '/TrueType':
-                    if cmap30 := fontInfo.get('cmap30'):
-                        self.cc2glyphname = {cc:PdfName(gname) for cc,gname in cmap30.items()}
-                    elif cmap10 := fontInfo.get('cmap10'):
-                        self.cc2glyphname = {cc:PdfName(gname) for cc,gname in cmap10.items()}
+                if self.name == '/Built-In':
+                    # PDF Ref. v1.7 p.432
+                    if len(fontInfo) == 0:
+                        # In case font program extraction failed or was not requested
+                        pass
+                    elif cmap30:
+                        high = [(ord(cc)>>8) for cc in cmap30]
+                        if not any(all(h==a for h in high) for a in [0x00, 0xf0, 0xf1, 0xf2]):
+                            raise ValueError(f"failed (3,0) cmap range check in a TrueType font: {font.BaseFont}")
+                        cc2g = {chr(ord(cc) & 0xff):PdfName(gname) for cc,gname in cmap30.items()}
+                    elif cmap10:
+                        cc2g = {cc:PdfName(gname) for cc,gname in cmap10.items()}
                     else:
-                        raise ValueError(f'no built-in encoding in a TrueType font: {font.BaseFont}')
+                        raise ValueError(f'no (3,0) or (1,0) cmap in a TrueType font: {font.BaseFont}')
                 elif self.name:
-                    self.cc2glyphname = PdfFontEncodingStandards.get_cc2glyphname(self.name)
+                    cc2g = PdfFontEncodingStandards.get_cc2glyphname(self.name)
                 elif gid2gname:
-                    self.cc2glyphname = {gid:PdfName(gname) for gid,gname in gid2gname.items()}
+                    cc2g = {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
 
-        # reset self.glyphname2cc
+        self.cc2glyphname = cc2g
         self.reset_glyphname2cc()
 
     # -------------------------------------------------------------------------------- differences_to_cc2glyphname()

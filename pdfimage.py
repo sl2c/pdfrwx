@@ -166,20 +166,34 @@ class PdfColorSpace:
             ctx = lc.cmsCreateContext(None, None)
             white = lc.cmsCIExyY()
             white.x, white.y, white.Y = x, y, Y
+
             if name == '/Lab':
+
                 profile = lc.cmsCreateLab2Profile(white)
+
             if name == '/CalGray':
+
                 gamma = float(dic.Gamma) if dic.Gamma != None else 1
                 transferFunction = lc.cmsBuildGamma(ctx,gamma)
                 profile = lc.cmsCreateGrayProfile(white, transferFunction)
+
             if name == '/CalRGB':
+
                 primaries = [float(v) for v in dic.Matrix] if dic.Matrix != None else [1,0,0,0,1,0,0,0,1]
-                primaries = [primaries[3*i,3*i+3] for i in range(3)]
+                primaries = [primaries[3*i:3*i+3] for i in range(3)]
                 primaries = [[X/(X+Y+Z),Y/(X+Y+Z),Y] for X,Y,Z in primaries]
                 gamma = [float(v) for v in dic.Gamma] if dic.Gamma != None else [1,1,1]
                 transferFunction = [lc.cmsBuildGamma(ctx, g) for g in gamma]
-                profile = lc.cmsCreateRGBProfile(white, primaries, transferFunction)
+
+                p = lc.cmsCIExyYTRIPLE()
+                pt.Red = lc.cmsCIExyY(); pt.Red.x, pt.Red.y, pt.Red.Y = primaries[0]
+                pt.Green = lc.cmsCIExyY(); pt.Green.x, pt.Green.y, pt.Green.Y = primaries[1]
+                pt.Blue = lc.cmsCIExyY(); pt.Blue.x, pt.Blue.y, pt.Blue.Y = primaries[2]
+                
+                profile = lc.cmsCreateRGBProfile(white, pt, transferFunction)
+
             with tempfile.TemporaryDirectory() as tmp:
+
                 T = lambda fileName: os.path.join(tmp, fileName)
                 lc.cmsSaveProfileToFile(profile, T('profile.cms'))
                 icc_profile = open(T('profile.cms'),'rb').read()
@@ -454,10 +468,13 @@ class PdfImage(AttrDict):
                 width, height = int(obj.Width), int(obj.Height)
                 cpp = self.get_cpp()
 
-                bpc_implied = (len(stream) * 8) / (width * height * cpp) if len(stream) > 1 else 1
-                if bpc_implied != self.bpc and int(bpc_implied) == bpc_implied:
-                    warn(f'replacing bad image xobject\'s bpc = {self.bpc} with the implied bpc = {int(bpc_implied)}')
-                    self.bpc = int(bpc_implied)
+                # Sometimes /BitsPerComponent is incorrect
+                bytesPerLine = len(stream) / height
+                if bytesPerLine == int(bytesPerLine):
+                    bpc_implied = (bytesPerLine * 8) / (width * cpp) if len(stream) > 1 else 1
+                    if bpc_implied != self.bpc and int(bpc_implied) == bpc_implied:
+                        warn(f'replacing bad image xobject\'s bpc = {self.bpc} with the implied bpc = {int(bpc_implied)}')
+                        self.bpc = int(bpc_implied)
 
                 array = PdfFilter.unpack_pixels(stream, width, cpp, self.bpc, truncate = True)
                 if array.shape[0] > height:
@@ -614,8 +631,9 @@ class PdfImage(AttrDict):
         # Default colorspace
         try:
             cs2cs = {'/DeviceGray':'/DefaultGray', '/DeviceRGB':'/DefaultRGB', '/DeviceCMYK':'/DefaultCMYK'}
-            cs = pdfPage.Resources.ColorSpace[cs2cs[self.ColorSpace]]
-            if debug: msg(f'Page default colorspace: {PdfColorSpace.toStr(self.ColorSpace)} --> {PdfColorSpace.toStr(cs)}')
+            cs = pdfPage.Resources.ColorSpace[cs2cs[self.ColorSpace]] or self.ColorSpace
+            if cs != None and debug:
+                msg(f'Page default colorspace: {PdfColorSpace.toStr(self.ColorSpace)} --> {PdfColorSpace.toStr(cs)}')
         except:
             cs = self.ColorSpace
 
@@ -1067,6 +1085,10 @@ class PdfImage(AttrDict):
 
         elif Format == 'JPEG2000':
 
+            if image.get_mode() not in ['L', 'RGB']:
+                msg(f'mode {image.get_mode()} not supported by JPEG2000; skipping')
+                return
+
             assert Q or CR
             if Q: assert 0 < Q <= 100
             if CR: assert CR > 1
@@ -1388,15 +1410,28 @@ class PdfImage(AttrDict):
         '''
         Encode array as a JPEG2000 image.
         '''
-        assert CR or Q
-        CR = int(round(CR)) if CR != None else int(round(2 ** ((100 - Q)/10.0)))
+        if alpha is not None:
+            raise ValueError(f'JPEG2000 encoding with alpha-channel is not implemented')
+
+        # make sure colorspace is either grayscale or RGB
         cpp = PdfColorSpace.get_cpp(cs)
         if cpp not in [1,3]:
             raise ValueError(f'Jp2k: cpp = {cpp} not supported (must be 1 or 3)')
+
+        # determine compression ratio
+        assert CR or Q
+        CR = int(round(CR)) if CR != None else int(round(2 ** ((100 - Q)/10.0)))
+
+        # limit the number of resolutions for small images
+        numres = 6 # the default for large images
+        while 1 << numres > min(array.shape[:2]):
+            numres -= 1
+
+        # encode
         with tempfile.TemporaryDirectory() as tmp:
             T = lambda fileName: os.path.join(tmp, fileName)
             # can also try: cratios=[CR*4, CR*2, CR]
-            Jp2k(T('encoded.jp2'), array, colorspace='RGB' if cpp == 3 else 'Gray', cratios=[CR])
+            Jp2k(T('encoded.jp2'), array, colorspace='RGB' if cpp == 3 else 'Gray', cratios=[CR], numres=numres)
             
             return open(T('encoded.jp2'), 'rb').read()
 
@@ -1756,7 +1791,7 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
                 modified = True
 
         if options.colorspace:
-            image.render(pdfPage = pdfPage)
+            image.render(pdfPage = pdfPage, debug = options.debug)
             mode = {'cmyk':'CMYK', 'rgb':'RGB', 'gray':'L', 'grey':'L'}.get(options.colorspace.lower())
             msg(f'converting colorspace: {image.get_mode()} --> {mode}')
             modified = image.change_mode(mode, intent)
@@ -1822,6 +1857,7 @@ if __name__ == '__main__':
     ap.add_argument('-output', '-o', type=str, metavar='PATH', help='output PDF file path')
     ap.add_argument('-pages', type=str, metavar='RANGE', help='process selected pages; RANGE = N1[,N2-N3[,..]]')
     ap.add_argument('-dpi', type=float, metavar='N', help='set resolution of input images to DPI')
+    ap.add_argument('-debug', action='store_true', help='turns debugging on')
 
     ap.add_argument('-bitonal', action='store_true', help='convert color/gray images to bitonal using Otsu\'s algorithm')
     ap.add_argument('-auto', action='store_true', help='detect if gray/color images are in fact bitonal and convert them')

@@ -35,7 +35,9 @@ import hashlib
 
 class PdfStreamEditor:
 
-    def __init__(self, xobj:PdfDict, glyphMap:PdfFontGlyphMap,
+    def __init__(self,
+                    xobj:PdfDict,
+                    glyphMap:PdfFontGlyphMap = PdfFontGlyphMap(),
                     textOnly:bool=False,
                     graphicsOnly:bool=False,
                     normalize=False,
@@ -87,8 +89,8 @@ class PdfStreamEditor:
         '''
         if state == None: state = PdfState(self.xobj.inheritable.Resources,
                                            self.glyphMap,
-                                           extractFontProgram=self.extractFontProgram,
-                                           makeSyntheticCmap=self.makeSyntheticCmap)
+                                           extractFontProgram=False,
+                                           makeSyntheticCmap=False)
         result = []
         for leaf in tree:
             cmd, args = leaf[0], leaf[1]
@@ -216,8 +218,14 @@ class PdfStreamEditor:
         for x in xobjects:
             if id(x) not in xobjCache and x.Subtype == PdfName.Form and x.stream != None:
                 # Creates an editor of the same type as that of any inheriting class
-                editor = type(self)(x, self.glyphMap, textOnly = self.textOnly, graphicsOnly=self.graphicsOnly,
-                                    normalize = self.normalize, debug = self.debug)
+                editor = type(self)(xobj = x,
+                                    glyphMap = self.glyphMap,
+                                    textOnly = self.textOnly,
+                                    graphicsOnly = self.graphicsOnly,
+                                    normalize = self.normalize,
+                                    debug = self.debug,
+                                    extractFontProgram = self.extractFontProgram,
+                                    makeSyntheticCmap = self.makeSyntheticCmap)
                 xobjCache[id(x)] = editor.recurse(recursedFunction, xobjCache, *args, **kwarg)
                 if editor.isModified: self.isModified = True
 
@@ -242,8 +250,8 @@ class PdfStreamEditor:
         # This state is local to this function
         state = PdfState(resources = self.xobj.inheritable.Resources,
                               glyphMap = self.glyphMap,
-                              extractFontProgram = self.extractFontProgram,
-                              makeSyntheticCmap = self.makeSyntheticCmap)
+                              extractFontProgram = False,
+                              makeSyntheticCmap = False)
 
         res = self.xobj.inheritable.Resources
 
@@ -493,6 +501,8 @@ class PdfStreamEditor:
                     btText = PdfStreamEditor.chunks_to_text(btChunks)
 
                     discardText = (regex != '' and re.search(regex,btText) != None)
+
+
                     discardOCR = False if not removeOCR else \
                         any(len(kid[1])>0 and (kid[0],kid[1][0]) == ('Tr','3') for kid in leaf[2])
                     

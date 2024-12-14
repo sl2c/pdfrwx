@@ -19,6 +19,8 @@ FL107;2014
 Accent;0301
 accent;0301
 bot;22A5
+bar.one;2015
+bar.two;2015
 check;2713
 equaldotleftright;2252
 nobreakspace;00A0
@@ -50,6 +52,7 @@ lessthanorequalangled;2A7D
 greaterthanorequalangled;2A7E
 integralex;23ae
 EurDig;20AC
+zero.slash;0030
 # ============================================== Numbers
 0;0030
 1;0031
@@ -873,20 +876,28 @@ VertBar1;007c
 AE;00C6
 Complex;2102
 Delta;2206
+Delta1;2206
 Gamma;0393
+Gamma1;0393
 Ifractur;2111
 Lambda;039B
+Lambda1;039B
 Natural;2115
 OE;0152
 Omega;2126
+Omega1;2126
 Oslash;00D8
 Phi;03A6
+Phi1;03A6
 Pi;03A0
 Psi;03A8
+Psi1;03A8
 Real;211D
 Rfractur;211C
 Sigma;03A3
+Sigma1;03A3
 Theta;0398
+Theta1;0398
 Upsilon;03A5
 Xi;039E
 Zinteger;2124
@@ -983,8 +994,11 @@ braceleftbig8;007B
 braceleftbig9;007B
 braceleftbigg;007B
 braceleftbt;23A9
+braceleft.bot;23A9
 braceleftmid;23A8
+braceleft.mid;23A8
 bracelefttp;23A7
+braceleft.top;23A7
 braceright;007D
 bracerightBig;007D
 bracerightBigg;007D
@@ -1000,8 +1014,11 @@ bracerightbig8;007D
 bracerightbig9;007D
 bracerightbigg;007D
 bracerightbt;23AD
+braceright.bot;23AD
 bracerightmid;23AC
+braceright.mid;23AC
 bracerighttp;23AB
+braceright.top;23AB
 bracketleftBig;005B
 bracketleftBigg;005B
 bracketleftbig;005B
@@ -1101,6 +1118,7 @@ endash;2013
 epsilon1;1D716
 #epsilon1;03B5
 epsilon;03B5
+equal1;003D
 equivalence;2261
 equivasymptotic;224D
 eta;03B7
