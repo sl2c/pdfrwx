@@ -50,7 +50,8 @@ class PdfState:
 
         self.current_state = PdfDict(
             CTM = MAT(),
-            Tm = MAT(), Tlm = MAT(), Tm_prev = MAT(),
+            Tm = MAT(), Tlm = MAT(),
+            # Tm_prev = MAT(),
             Tc = 0,  Tw = 0, Th = 100, Tl = 0, Trise = 0, Tmode = 0, 
             fontName = None, fontSize = None, font = None,
         )
@@ -194,8 +195,8 @@ class PdfState:
             # Update Tm, but not Tlm
             cs.Tm = cs.Tm * MAT([1,0,0,1,textWidth,0])
 
-            # Update cs.Tm_prev
-            cs.Tm_prev = cs.Tm.copy()
+            # # Update cs.Tm_prev
+            # cs.Tm_prev = cs.Tm.copy()
 
 
             return (textString, textMatrix)

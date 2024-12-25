@@ -52,6 +52,16 @@ class PdfFontEncoding:
 
             assert font.Subtype != '/Type0' # SIMPLE font
 
+
+            # if font.Subtype == '/TrueType':
+            #     # PDF Ref. v1.7 sec. 5.5.5: Encodings for TrueType Fonts
+            #     isSymbolic = PdfFontDictFunc.is_symbolic(font)
+            #     enc = font.Encoding
+            #     if not isSymbolic and enc not in ['/MacRomanEncoding', '/WinAnsiEncoding'] \
+            #         or isSymbolic and enc is not None:
+            #         symbolicStr = 'symbolic' if isSymbolic else 'non-symbolic'
+            #         err(f'bad encoding for a {symbolicStr} font: {enc}')
+
             self.isType3 = font.Subtype == '/Type3'
 
             fd = font.FontDescriptor
@@ -76,7 +86,7 @@ class PdfFontEncoding:
                         else None
 
                     if self.baseEncoding:
-                        cc2g = PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding)
+                        cc2g = PdfFontEncodingStandards.get_cc2glyphname(self.baseEncoding) or {}
                     elif gid2gname:
                         cc2g = {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
 
@@ -116,7 +126,7 @@ class PdfFontEncoding:
                     else:
                         raise ValueError(f'no (3,0) or (1,0) cmap in a TrueType font: {font.BaseFont}')
                 elif self.name:
-                    cc2g = PdfFontEncodingStandards.get_cc2glyphname(self.name)
+                    cc2g = PdfFontEncodingStandards.get_cc2glyphname(self.name) or {}
                 elif gid2gname:
                     cc2g = {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
 
@@ -197,7 +207,7 @@ class PdfFontEncoding:
         * `diffEncoding` is essentially equal to self with the mappings of all character codes
         such that `self.cc2glyphname` is in `encoding.cc2glyphname.values()` removed from it. So, in other words,
         if `E` is the image of the `encoding`, i.e. a set of all glyph names that the `encoding` maps to, then
-        `diffEncoding` is that part of `self` that ony maps to glyph names that are not in `E`.
+        `diffEncoding` is that part of `self` that only maps to glyph names that are not in `E`.
         '''
         reEncMap = {}
         cc2glyphname = {}

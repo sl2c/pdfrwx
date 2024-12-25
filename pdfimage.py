@@ -185,7 +185,7 @@ class PdfColorSpace:
                 gamma = [float(v) for v in dic.Gamma] if dic.Gamma != None else [1,1,1]
                 transferFunction = [lc.cmsBuildGamma(ctx, g) for g in gamma]
 
-                p = lc.cmsCIExyYTRIPLE()
+                pt = lc.cmsCIExyYTRIPLE()
                 pt.Red = lc.cmsCIExyY(); pt.Red.x, pt.Red.y, pt.Red.Y = primaries[0]
                 pt.Green = lc.cmsCIExyY(); pt.Green.x, pt.Green.y, pt.Green.Y = primaries[1]
                 pt.Blue = lc.cmsCIExyY(); pt.Blue.x, pt.Blue.y, pt.Blue.Y = primaries[2]
@@ -428,11 +428,12 @@ class PdfImage(AttrDict):
                  obj:IndirectPdfDict = None,
                  pil:Image.Image = None,
                  array:np.ndarray = None,
+                 jpeg:bytes = None,
                  jp2:bytes = None):
         '''
         Creates a PdfImage.
         '''
-        if sum(1 for x in [obj, pil, array,jp2] if x is not None) != 1:
+        if sum(1 for x in [obj, pil, array,jp2,jpeg] if x is not None) != 1:
             raise ValueError(f'exactly one of the [pil, array, obj] arguments should be given to constructor')
         
         self.bpc = None
@@ -441,6 +442,7 @@ class PdfImage(AttrDict):
 
         self.pil = pil
         self.array = array
+        self.jpeg = jpeg
         self.jp2 = None
 
         self.Decode = None
@@ -528,7 +530,6 @@ class PdfImage(AttrDict):
             elif obj.Filter == '/DCTDecode': 
 
                 pil = Image.open(BytesIO(stream))
-
                 self.set_pil(pil)
 
             elif obj.Filter == '/JPXDecode':
@@ -554,10 +555,14 @@ class PdfImage(AttrDict):
 
         else:
 
-            if pil:
+            if jpeg:
+
+                self.pil = Image.open(BytesIO(jpeg))
+
+            if self.pil:
 
                 # Handle transparency
-                if pil.mode in ['PA','LA','RGBA']:
+                if self.pil.mode in ['PA','LA','RGBA']:
                     self.pil, alpha = PdfImage._pil_split_alpha(pil)
                     self.SMask = PdfImage(pil = alpha).encode()
 
@@ -830,16 +835,18 @@ class PdfImage(AttrDict):
         self.pil = pil
         self.array = None
         self.jp2 = None
+        self.jpeg = None
 
     # -------------------------------------------------------------------------------------- set_array()
 
     def set_array(self, array:np.ndarray):
         '''
-        Sets self.array to the given numpy image array, and self.pil & self.jp2 to None
+        Sets self.array to the given numpy image array, and self.pil, self.jpeg & self.jp2 to None
         '''
         self.pil = None
         self.array = array
         self.jp2 = None
+        self.jpeg = None
 
     # -------------------------------------------------------------------------------------- set_jp2()
 
@@ -867,6 +874,7 @@ class PdfImage(AttrDict):
             self.ColorSpace = jp2_cs
             self.Decode = None
         self.pil = None
+        self.jpeg = None
 
     # -------------------------------------------------------------------------------------- resize()
 
@@ -903,11 +911,19 @@ class PdfImage(AttrDict):
         if Format == 'auto':
             Format = self.pil.format if self.pil and self.pil.format in ext \
                         else 'JPEG2000' if self.jp2 \
+                        else 'JPEG' if self.jpeg \
                         else 'TIFF'
             if addAlpha and Format == 'JPEG':
                 Format = 'TIFF'
 
         if Format not in ext: raise ValueError(f'cannot save in format: {Format}')
+
+
+        # Save original JPEG bytes object whenever possible
+        if Format == 'JPEG' and self.jpeg and not render and not addAlpha and Q == None \
+                and (self.get_mode() != 'CMYK' or not invertCMYK):
+            msg(f'saving original (unmodified) JPEG file')
+            return self.jpeg, '.jpg'
 
         if addAlpha:
             msg('rendering alpha')
@@ -2031,6 +2047,7 @@ if __name__ == '__main__':
             if options.despeckle: suffix += f'-despeckle={options.despeckle}'
             if options.scale2x: suffix += f'-scale2x'
             if options.upsample: suffix += f'-upsample={options.alpha}'
+            if options.bounds != 'none': suffix += f'-bounds={options.bounds}'
             if options.resample: suffix += '-resample'
             if options.colorspace: suffix += f'-{options.colorspace}'
             if options.zip: suffix += f'-zip'
@@ -2057,6 +2074,8 @@ if __name__ == '__main__':
             base,ext = os.path.splitext(imagePath)
             if ext.lower() == '.jp2':
                 image = PdfImage(jp2 = open(imagePath,'rb').read())
+            elif ext.lower() in ['.jpg', '.jpeg']:
+                image = PdfImage(jpeg = open(imagePath,'rb').read())
             else:
                 image = PdfImage(pil = Image.open(imagePath))
 

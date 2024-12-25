@@ -246,7 +246,9 @@ class PdfFontDictFunc:
         CIDToGIDMap = font.DescendantFonts[0].CIDToGIDMap
         if CIDToGIDMap and isinstance(CIDToGIDMap, PdfDict):
             b = py23_diffs.convert_store(PdfFilter.uncompress(CIDToGIDMap).stream)
-            return {chr(i):chr(b[2*i]*256 + b[2*i+1]) for i in range(len(b) // 2)}
+            cid2gid = {chr(i):chr(b[2*i]*256 + b[2*i+1]) for i in range(len(b) // 2)}
+            cid2gid = {cid:gid for cid,gid in cid2gid.items() if gid != chr(0)}
+            return cid2gid
         else:
             return None
 
@@ -312,24 +314,29 @@ class PdfFontDictFunc:
         '''
         Returns `subtype + suffix` where `subtype` is one of:
         
-        `/Type1, /TrueType, /CIDFontType0, /CIDFontType2`
+        `/Type1, /Type3, /TTF, /MMF, /CID0, /CID2`
 
         and suffix is:
         
         - `'C'` if `FontFile3.Subtype` is `/Type1C` or `/CIDFontType0C`;
-        - `'-OpenType'` if `FontFile3.Subtype` is `/OpenType`;
+        - `'O'` if `FontFile3.Subtype` is `/OpenType`;
         - absent if `FontFile3` font program is absent.
         
         See PDF Ref. v1.7 sec. 5.8, table 5.23.
         '''
-        suffixes = {'/Type1C':'C', '/CIDFontType0C':'C', '/OpenType':'-OpenType'}
+        suffixes = {'/Type1C':'C', '/CIDFontType0C':'C', '/OpenType':'O'}
+        subtypes = {'/Type1':'/Type1', '/Type3':'/Type3', '/TrueType':'/TrueType', '/MMType1':'/MMType1', '/CIDFontType0':'/CIDType0', '/CIDFontType2':'/CIDType2'}
 
         if not font: return None
 
         f = font if font.Subtype != '/Type0' else font.DescendantFonts[0]
 
-        try: return f.Subtype + suffixes.get(f.FontDescriptor.FontFile3.Subtype)
-        except: return f.Subtype
+        subtype = subtypes.get(f.Subtype)
+
+        try: suffix = suffixes.get(f.FontDescriptor.FontFile3.Subtype)
+        except: suffix = ''
+
+        return subtype + suffix
 
     # -------------------------------------------------------------------------------- get_encoding_string()
 
@@ -342,7 +349,7 @@ class PdfFontDictFunc:
         if not PdfFontDictFunc.is_cid(font):
             enc = font.Encoding
             if not isinstance(enc, PdfDict): return enc
-            return [enc.BaseEncoding, '/Differences']
+            return f'[{enc.BaseEncoding}, /Differences]'
         else:
             dFont = font.DescendantFonts[0]
             s = []
@@ -578,13 +585,15 @@ class PdfFontFile:
         # Presence of ROS means a CID-encoded CFF font
         info['ROS'] = font.ROS if hasattr(font, 'ROS') else None
 
-        # This initializes char.width-s
         try:
             chars = font.CharStrings    
-            for char in chars.values(): char.draw(NullPen())
         except:
             warn(f'CFF font has no CharStrings: {info["FontName"]}')
             chars = {}
+
+        # This initializes char.width-s
+        for char in chars.values():
+            char.draw(NullPen())
 
         # gid2gname
         if info['ROS']:
@@ -593,7 +602,7 @@ class PdfFontFile:
             try:
                 info['gid2gname'] = {i:gname for i,gname in enumerate(font.Encoding) if gname != '.notdef'}
             except:
-                warn(f'CFF font has no CharStrings: {info["FontName"]}')
+                warn(f'CFF font has no Encoding: {info["FontName"]}')
                 info['gid2gname'] = {}
                 
         # gname2width
@@ -650,7 +659,8 @@ class PdfFontFile:
     def fix_ttf_font(font:bytes):
         '''
         Adds an empty (3,1) cmap to the TTF font
-        When such font is then used in a PDF this essentially mean "cid == gid" internal encoding
+        When such font is then used in a PDF this essentially means
+        an internal encoding such that "cid == gid"
         '''
 
         ttFont = TTFont(BytesIO(font))
@@ -680,9 +690,8 @@ class PdfFontFile:
         Writes a CFF font program to file.
         '''
         from fontTools.misc.xmlWriter import XMLWriter
-        ttFont = TTFont()
         cffFont = CFFFontSet()
-        cffFont.decompile(file = BytesIO(cff), otFont = ttFont)
+        cffFont.decompile(file = BytesIO(cff), otFont = TTFont())
         cffFont.toXML(XMLWriter(filePath))
 
 # =========================================================================== class PdfFont
@@ -745,14 +754,7 @@ class PdfFont:
         elif self.font:
 
             if extractFontProgram:
-
-                isSymbolic = PdfFontDictFunc.is_symbolic(self.font)
-
-                if self.font.Subtype == '/TrueType':
-                    # PDF Ref. v1.7 sec. 5.5.5: Encodings for TrueType Fonts
-                    assert self.font.Encoding in ['/MacRomanEncoding', '/WinAnsiEncoding', None]
-                    assert (self.font.Encoding is not None) ^ isSymbolic
-
+ 
                 self.extract_font_program()
 
                 self.info = PdfFontFile.read_pfb_info(self.pfb) if self.pfb \
@@ -1423,15 +1425,15 @@ class PdfFont:
 
         return cc2width
 
-    # -------------------------------------------------------------------------------- __str__()
+    # -------------------------------------------------------------------------------- __repr__()
 
-    def __str__(self):
+    def __repr__(self):
         '''
         A string representation of a font
         '''
         subtype = PdfFontDictFunc.get_subtype_string(self.font)
         encoding = PdfFontDictFunc.get_encoding_string(self.font)
-        return f'{subtype:14s} {self.name} {encoding}'
+        return f'{subtype} {self.name} {encoding}'
 
     # -------------------------------------------------------------------------------- fontTableToPdfPages()
 
@@ -1697,9 +1699,10 @@ class PdfFontUtils:
                 name,ext = os.path.splitext(path)
                 data = open(path, 'rb').read()
                 cc2unicode = {chr(i):chr(i) for i in range(65536)}
-        
-                font = PdfFont(ttf = data, cc2unicode = cc2unicode) if ext == '.ttf' \
-                        else PdfFont(otf = data, cc2unicode = cc2unicode) if ext == '.otf' \
+
+                glyphMap = PdfFontGlyphMap(loadAdobeGlyphList = True)
+                font = PdfFont(ttf = data, glyphMap = glyphMap, cc2unicode = cc2unicode) if ext == '.ttf' \
+                        else PdfFont(otf = data, glyphMap = glyphMap, cc2unicode = cc2unicode) if ext == '.otf' \
                         else None
                 if font:
                     nameFound = name

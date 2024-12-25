@@ -98,6 +98,7 @@ dncurlybracketmid;23DF
 harpoonrightnosp;20D1
 tildenosp2char;0360
 tildenosp3char;0360
+tildenosp4char;0360
 # ============================================== EuclidMathOne
 backslashmath;29f9
 circleminusalt;229d
@@ -1082,7 +1083,9 @@ circleplusdisplay;2295
 circleplustext;2295
 circumflex;02C6
 circumflexnosp;0302
-circumflexnosp4char;0302
+circumflexnosp2char;1DCD
+circumflexnosp3char;1DCD
+circumflexnosp4char;1DCD
 club;2663
 comma;002C
 contintegraldisplay;222E
