@@ -1,10 +1,498 @@
 # Some extra glyph names that were encountered
-# ============================================== Ligatures from PTSerifPro
+.notdef;FFFD
+# ============================================== Redefine Greek
+Delta;0394
+Omega;03A9
+# mu;00B5
+mu;03BC
+# ============================================== Ligatures
 f_f;FB00
 f_i;FB01
 f_l;FB02
 f_f_i;FB03
 f_f_l;FB04
+T_h;00540068
+t_t;00740074
+f_t;00660074
+ghost;200B
+# =======================================================================================================
+# COMPUTER MODERN FONTS
+# ============================================== CMEX
+vextendsingle;23D0
+vextenddouble;2016
+radicalvertex;23D0
+arrowvertex;23D0
+arrowvertexdbl;2016
+# ============================================== CMSY
+precedesequal;2AAF
+followsequal;2AB0
+succeedsequal;2AB0
+intersectionsq;2A05
+unionsq;2A06
+unionsqdisplay;2A06
+unionsqtext;2A06
+# ============================================== wasy
+lightning;21AF
+leftarrowhead;02C2
+rightarrowhead;02C3
+uparrowhead;02C4
+downarrowhead;02C5
+AC;223F
+APLup;25B3
+lhd;22B2
+unlhd;22B4
+rhd;22B3
+unrhd;22B5
+recorder;2315
+phone;260E
+checked;2713
+pointer;21E8
+bell;1F514
+eigthnote;266A
+halfnote;1D15E
+fullnote;1D15D
+twonotes;266B
+LHD;25C4
+RHD;25BA
+ascnode;260A
+descnode;260B
+invdiameter;2349
+logof;235F
+invneg;2310
+clock;1F552
+varprop;221D
+varangle;2222
+diameter;2300
+CIRCLE;25CF
+rightturn;21BB
+leftturn;21BA
+leftmoon;263E
+rightmoon;263D
+mercury;263F
+smiley;263A
+blacksmiley;263B
+frownie;2639
+agemO;2127
+Bowtie;22C8
+XBox;22A0
+kreuz;2720
+hexagon;2394
+octagon;1F6D1
+varhexagon;2B21
+sqsubset;228F
+sqsupset;2290
+apprle;2272
+apprge;2273
+VHF;224B
+hexstar;2736
+varhexstar;2736
+davidsstar;2721
+pentagon;2B20
+pentastar;2605
+APLdown;25BD
+LEFTCIRCLE;25D6
+RIGHTCIRCLE;25D7
+Leftcircle;263E
+Rightcircle;263D
+UParrow;25B2
+DOWNarrow;25BC
+Paragraph;00A7
+zh;0292
+gluonelement;27B0
+gluonbelement;25DC
+gluoneelement;25DD
+applecmd;2318
+inve;0259
+conjunction;260C
+opposition;260D
+jupiter;2643
+saturn;2644
+uranus;26E2
+neptun;2646
+pluto;2647
+sagittarius;2650
+permil;2030
+dh;00F0
+openo;0254
+ataribox;233A
+APLuparrowbox;2350
+APLdownarrowbox;2357
+APLleftarrowbox;2347
+APLrightarrowbox;2348
+varint;222B
+iint;222C
+iiint;222D
+varoint;222E
+oiint;222F
+dispvarint;222B
+dispiint;222C
+dispiiint;222D
+dispvaroint;222E
+dispoiint;222F
+brokenvert;00A6
+APLinput;235E
+APLbox;2395
+APLcomment;235D
+# ============================================== txsyc (from newtx package)
+mapsfrom;27FB
+Mapsto;2907
+Mapsfrom;2906
+mmapsto;2AE6
+mmapsfrom;2AE3
+Mmapsto;22AB
+Mmapsfrom;2AE5
+medcircle;25CB
+medbullet;25CF
+circlebackslash;29B8
+parallel1;2225
+nparallel;2226
+nparallel1;2226
+colonapprox;003A2248
+colonsim;003A223C
+coloncolonapprox;22372248
+coloncolonsim;2237223C
+doteq;2250
+multimapinv;27DC
+multimapboth;29DF
+solidmultimap;002D2022
+solidmultimapinv;2022002D
+solidmultimapboth;2022002D2022
+rsolidmultimapboth;22B6
+lsolidmultimapboth;22B7
+forcesextra;22AB
+simequal;2245
+precedesordblequal;2AB3
+followsordblequal;2AB4
+notprecedesorsimilar;227E0338
+notfollowsorsimilar;227F0338
+notlessorsimilar;2274
+notgreaterorsimilar;2275
+notlessorapproxeql;2A850338
+notgreaterorapproxeql;2A860338
+notprecedesorcurly;22E0
+notfollowsorcurly;22E1
+notgreaterorless;2278
+notlessorgreater;2279
+notdifference;224F0338
+notgeomequivalent;224E0338
+notrevsimilar;223D0337
+notrevasymptequal;22CD0338
+nequal;2260
+nequivasymptotic;226D
+nequivalence;2262
+nsimilar;2241
+napproxequal;2249
+npropersubset;2284
+npropersuperset;2285
+nlessmuch;226A0338
+ngreatermuch;226B0338
+notapproxorequal;224A0338
+notfollowsorequal;2AB70338
+notprecedesorequal;2AB80338
+notprecedesordblequal;2AB30338
+notfollowsordblequal;2AB40338
+nsimilarequal;2244
+nelement;2209
+nowner;220C
+notsubsetdbl;22D00338
+notsupersetdbl;22D10338
+nsubsetsqequal;22E2
+nsupersetsqequal;22E3
+colonequal;2254
+equalcolon;2255
+colonbar;003A002D
+barcolon;2239
+Colonequal;2A74
+Equalcolon;003D2237
+Colonbar;2237002D
+Barcolon;002D2237
+strict;297D
+strictinverse;297C
+strictboth;297C297D
+ampersandinv;214B
+lbag;27C5
+rbag;27C6
+lbagbig;27C5
+rbagbig;27C6
+oless;29C0
+ogreater;29C1
+owedge;222720DD
+ovee;222820DD
+circlebar;29B6
+circlebackslash;29B8
+multicloseleft1;22C9
+multicloseright1;22CA
+multicloseboth1;22C8
+multiopenboth1;2715
+multicloseboth;22C8
+multiopenboth;2715
+Diamond;25C7
+Diamondsolid;25C6
+intersectmulti;22C2
+notsquareimage;228F0338
+notsquareoriginal;22900338
+dashedarrowleft;290E
+dashedarrowright;290F
+dashedarrowboth;290E290F
+squiggleleft;21DC
+notdblarrowheadright;2900
+notdblarrowheadleft;2B34
+squareasterisk;29C6
+squarebackslash;29C5
+squarebar;25EB
+squareslash;29C4
+Wreathproduct;22402240
+lambdaslash;019B
+lambdabar;019B
+club1;2667
+diamond1;2666
+heart1;2665
+spade1;2664
+Arrownortheast;21D7
+Arrowsoutheast;21D8
+Arrownorthwest;21D6
+Arrowsouthwest;21D9
+Latticetop;2AEA
+Perpendicular;2AEB
+leadstoext;223F
+leadsto;2933
+squareunionmulti;2A06
+squareintersectmulti;2A05
+dblbracketleft;27E6
+dblbracketright;27E7
+squareright;25A12192
+squareleft;219025A1
+squaredotright;22A12192
+squaredotleft;219022A1
+Diamondright;25C72192
+Diamondleft;219025C7
+Diamonddotright;27D02192
+Diamonddotleft;219027D0
+squareRight;25A121D2
+squareLeft;21D025A1
+squaredotRight;22A121D2
+squaredotLeft;21D022A1
+DiamondRight;25C721D2
+DiamondLeft;21D025C7
+DiamonddotRight;27D021D2
+DiamonddotLeft;21D027D0
+Diamonddot;27D0
+circledotright;22992192
+circledotleft;21902299
+# ============================================== txsys
+barbar;03040304
+bartilde;03040303
+barhat;03040302
+tildebar;03030304
+tildetilde;03030303
+tildehat;03030302
+hatbar;03020304
+hattilde;03020303
+hathat;03020302
+nexists;2204
+dotacc;02D9
+ddotacc;00A8
+dddotacc;20DB
+lvec;20D6
+harpoonacc;20D1
+lharpoonacc;20D0
+lrvec;20E1
+lrharpoonacc;294E
+vec;20D7
+uni20D7.rt;20EF
+periodcentered.B;00B7
+periodcentered.BB;00B7
+openbullet.S;2218
+bullet.S;2022
+bullet.SS;2022
+bullet.SSS;2022
+prime.var;2032
+ddddotacc;20DC
+transpose;1D40
+hermitconj;1D34
+nPerp;2AEB0338
+# =======================================================================================================
+# MS WORD FONTS
+# ============================================== Times New Roman
+commaaccent;0313
+undercommaaccent;0326
+lillah;FDF2
+smallv;065A
+circumflex.arab;065B
+patah.wide;05B7
+bari.dotless;01310335
+dot.one;FBB3
+dot.twohoriz;FBB5
+dot.threeup;FBB7
+dot.threedown;FBB9
+dot.twovert;FBBE
+dot.four;FBBB
+wavyhamza;0654
+wasla;FBC2
+# ============================================== Arial
+elipsis;2026
+j.dotless;0237
+allah;FDF2
+riyal;FDFC
+# ============================================== Symbol
+copyrightserif;00A9
+copyrightsans;00A9
+registerserif;00AE
+registersans;00AE
+trademarkserif;2122
+trademarksans;2122
+# ============================================== MT-Extra
+approachlimit;2250
+arrowlongbothv;2195
+arrowdbllongbothv;21F3
+arrowleftnosp;2190
+arrowrightnosp;2192
+arrowrtltnosp;2194
+arrownesw;2922
+arrownwse;2921
+arrowpairrightleft;21C4
+arrowrtoversmallarrowlt;2942
+smallarrowltoverarrowrt;2944
+harpoonrightleft;21CC
+arrowrighttophalf;21C0
+arrowleftbothalf;21BD
+horizontalharpoonextender;23AF
+leftwhitesqbracket;27E6
+rightwhitesqbracket;27E7
+leftwhitesqbrackettop;27E6
+leftwhitesqbracketextender;27E6
+leftwhitesqbracketbottom;27E6
+rightwhitesqbrackettop;27E6
+rightwhitesqbracketextender;27E6
+rightwhitesqbracketbottom;27E6
+ccwcontourintcircle;27F2
+cwcontourintcircle;27F3
+combarrowextender;23AF
+deltaequal;225C
+dncurlybracketleft;23DF
+dncurlybracketmid;23DF
+dncurlybracketright;23DF
+dnsquarebracketleft;231E
+dnsquarebracketright;231F
+upsquarebracketleft;231C
+upsquarebracketright;231D
+dnsquarebracketextension;23AF
+estimates;2259
+gravenosp;0060
+harpoonleftnosp;21BC
+circumflexnosp;02C6
+tildenosp;02DC
+dotnosp;02D9
+harpoonleftnospbelow;21BD
+harpoonrightnosp;21C0
+harpoonrightnospbelow;21C1
+horizcurlybracketext;23AF
+jointstatus;23E0
+jointstatusleft;23E0
+jointstatusright;23E0
+jointstatusextension;23E0
+lambdabar;019b
+mho;2127
+parallelogram;25B1
+parallelto;2225
+primerev;2035
+rectangle;25AD
+replacement;FFFD
+ringoperator;2218
+slurabove2char;23DC
+slurabove3char;23DC
+slurabove4char;23DC
+circumflexnosp2char;02C6
+circumflexnosp3char;02C6
+circumflexnosp4char;02C6
+tildenosp2char;02DC
+tildenosp3char;02DC
+tildenosp4char;02DC
+upcurlybracketleft;23DE
+upcurlybracketmid;23DE
+upcurlybracketright;23DE
+upslopeellipsis;22F0
+downslopeellipsis;22F1
+verticalbraceright;23DF
+verticalbracketright;23B5
+verticalbraceleft;23DE
+verticalbracketleft;23B4
+integralloop;25CB
+doubleintegralloop;2B2D
+trippleintegralloop;2B2D
+exdoubleintegralloop;2B2D
+extrippleintegralloop;2B2D
+# upsquarebracketleft;
+# upsquarebracketright;
+# ============================================== LucidaSansUnicode
+Io;0401
+Acyril;0410
+Be;0411
+Ve;0412
+Ge;0413
+De;0414
+Ie;0415
+Zhe;0416
+Ze;0417
+Ii;0418
+Iibreve;0419
+Ka;041A
+El;041B
+Em;041C
+En;041D
+Ocyril;041E
+Pecyril;041F
+Er;0420
+Es;0421
+Te;0422
+Ucyril;0423
+Ef;0424
+Kha;0425
+Tse;0426
+Che;0427
+Sha;0428
+Shcha;0429
+Hard;042A
+Yeri;042B
+Soft;042C
+Ecyrilrev;042D
+Iu;042E
+Ia;042F
+acyril;0430
+be;0431
+ve;0432
+ge;0433
+de;0434
+ie;0435
+zhe;0436
+ze;0437
+ii;0438
+iibreve;0439
+ka;043A
+el;043B
+em;043C
+en;043D
+ocyril;043E
+pecyril;043F
+er;0440
+es;0441
+te;0442
+ucyril;0443
+ef;0444
+kha;0445
+tse;0446
+che;0447
+sha;0448
+shcha;0449
+hard;044A
+yeri;044B
+soft;044C
+ecyrilrev;044D
+iu;044E
+ia;044F
+io;0451
+# ============================================== CenturySchoolbook
+radicalex;203E
 # ============================================== Some more
 # 'hyphenminus' is, for some reason, not in (Adobe's) glyphlist.txt, there's only 'hyphen'
 hyphenminus;002D
@@ -27,19 +515,16 @@ nobreakspace;00A0
 guillemotleft.cyr;00AB
 guillemotright.cyr;00BB
 emdash.cyr;2014
-mapstochar;22A6
+# mapstochar;22A6
+mapstochar;27FC
 trianglert;25B6
 triangleopenrt;25B7
 visiblespace;2423
 SS;1E9E
 squaremultiply;22a0
-nequal;2260
-simequal;2245
 iintegdisplay;222C
-tildenosp;0303
 midhorizellipsis;22ef
 vertellipsis;22ee
-arrowleftnosp;20d6
 harpoonupleft;21bf
 squareplus;229E
 arrowbarright;21A6
@@ -53,17 +538,6 @@ greaterthanorequalangled;2A7E
 integralex;23ae
 EurDig;20AC
 zero.slash;0030
-# ============================================== Numbers
-0;0030
-1;0031
-2;0032
-3;0033
-4;0034
-5;0035
-6;0036
-7;0037
-8;0038
-9;0039
 # ============================================== Some weird version of LH-fonts
 visualspace;2423
 palochka;04c0
@@ -87,24 +561,16 @@ CapTheta;0398
 # ============================================== NewtonSymbol
 Narrowboth;2194
 Nellipsis;2026
-# ============================================== MT-Extra
-parallelto;2225
-ringoperator;2218
-combarrowextender;23AF
-arrowrightnosp;2192
-lambdabar;019b
-dotnosp;0307
-dncurlybracketmid;23DF
-harpoonrightnosp;20D1
-tildenosp2char;0360
-tildenosp3char;0360
-tildenosp4char;0360
+# ============================================== EuclidSymbol
+# This is most probably Horizontal Tab, but let's map it to SPACE instead
+HT;0020
 # ============================================== EuclidMathOne
 backslashmath;29f9
 circleminusalt;229d
 squareminus;229f
 box;25a1
-slashmath;29f8
+# slashmath;29f8
+slashmath;2215
 dividesvar;2223
 parallelvar;2225
 doesnotdividevar;2224
@@ -184,15 +650,11 @@ lessnotequivlnt;22E6
 greaternotequivlnt;22E7
 lessbutnotapproxequal;2A89
 greaterbutnotapproxequal;2A8A
-lessequalgreater;22DA
 greaterequalless;22DB
 HV11373;2A8B
 greaterdbleqlorless;2A8C
 xor;22BB
-nand;22BC
 perspcorrespond;2A5E
-precedesequal;2AAF
-succeedsequal;2AB0
 equalprecedes;22de
 equalfollows;22df
 precedesequalcurly;227c
@@ -234,40 +696,67 @@ subsetdblequal;2AC5
 supersetdblequal;2AC6
 notreflexsubset;2288
 notreflexsuperset;2289
-# These four have no Unicode points
-# notsubsetordblequal
-# notsupersetordblequal
-# notreflexsubsetdbl
-# notreflexsupersetdbl
+notequalnorless;2A950338
+notequalnorgreater;2A960338
+noteqlorprecede;22DE0338
+noteqlorsucceed;22DF0338
+notsubsetordblequal;2AC50338
+notsupersetordblequal;2AC60338
+notreflexsubsetdbl;2AC50338
+notreflexsupersetdbl;2AC60338
 # ============================================== EuclidExtra
 planckover2pi;210F
 planckover2pi1;210F
-arrowpairrightleft;21C4
 # ============================================== MSAM
-arrowaxisright;2192
 arrowtailleft;21A2
 arrowparrleftright;21C6
 arrowtripleright;21DB
 arrowtripleleft;21DA
 axisshort;2212
 circleequal;2257
+squiggleleftright;21DC21DD
+curlyleft;21AB
 curlyright;21AC
+equalorless;2A95
+equalorgreater;2A96
+equalorprecedes;22DE
+equalorfollows;22DF
+primereverse;2035
+trianglerightequal;22B5
+triangleleftequal;22B4
+triangleleftequal;22B4
+between;226C
+arrowaxisleft;2190
+arrowaxisright;2192
+lessequalgreater;22DA
+greaterlessequal;22DB
+lessdbleqlgreater;2A8B
+greaterdbleqlless;2A8C
+Yen;00A5
+nand;22BC
+perpcorrespond;2A5E
+smile;2323
+frown;2322
+uprise;22CF
+downfall;22CE
+forces;22A9
+forcesbar;22AA
+satisfies;22A8
+followsorequal;227F
+precedesorequal;227E
 harpoondownright;21C2
 measuredangle;2221
 multimap;22B8
 multiopenleft;22CB
 squaresolid;25A0
 sphericalangle;2222
-triangleleftequal;22B4
 trianglesolid;25B2
 equaldotrightleft;2253
-equalorprecedes;22DE
 anticlockwise;27F2
 clockwise;27F3
 complement;2201
 defines;225c
 arrowtripleleft;21DA
-satisfies;22A8
 precedesorcurly;227C
 circleasterisk;229B
 circlering;229A
@@ -280,8 +769,8 @@ greaterorapproxeql;2A86
 harpoonupright;21BE
 intercal;22BA
 lessorapproxeql;2A85
-revasymptequal;2243
 revsimilar;223D
+revasymptequal;22CD
 rightanglenw;231C
 rightanglene;231D
 rightanglesw;231E
@@ -296,6 +785,42 @@ followsorcurly;227D
 squaresmallsolid;25AA
 lessorsimilar;2272
 # ============================================== MSBM
+lessornotequal;2268
+greaterornotequal;2269
+#notlessorslnteql;2270
+#notgreaterorslnteql;2271
+notlessorslnteql;2A7D0338
+notgreaterorslnteql;2A7E0338
+lessnotequal;2A87
+greaternotequal;2A88
+notprecedesoreql;22E0
+notfollowsoreql;22E1
+notlessdblequal;22660338
+notgreaterdblequal;22670338
+notapproxequal;2247
+notsubsetoreql;2288
+notsupersetoreql;2289
+notsubsetordbleql;2AC50338
+notsupersetordbleql;2AC60338
+subsetornoteql;2AC50338
+supersetornoteql;2AC60338
+notsubseteql;2288
+notsuperseteql;2289
+notshortbar;2224
+notshortparallel;2226
+Finv;2132
+Gmir;2141
+beth;05d1
+daleth;05D3
+lessdot;22D6
+greaterdot;22D7
+multicloseleft;22C9
+multicloseright;22CA
+approxorequal;224A
+epsiloninv;03F6
+barshort;2223
+parallelshort;2225
+integerdivide;29F5
 archleftdown;21B6
 archrightdown;21B7
 dividemultiply;22C7
@@ -307,9 +832,6 @@ greaterornotdbleql;2269
 greaterornotsimilar;22E7
 greaternotdblequal;2A8A
 notarrowboth;21AE
-barshort;2223
-multicloseleft;22C9
-multicloseright;22CA
 notdblarrowleft;21CD
 notdblarrowright;21CF
 notdblarrowboth;21CE
@@ -321,71 +843,42 @@ notforcesextra;22AF
 notprecedes;2280
 nottriangeqlleft;22EC
 nottriangeqlright;22ED
-notsubsetoreql;228A
-notsupersetoreql;228B
 # These two have no Unicode points
 # notsubsetordbleql
 # notsupersetordbleql
 notturnstileleft;22ac
-lessdot;22D6
 lessnotdblequal;2A89
 lessornotdbleql;2268
 lessornotsimilar;22E6
-lessnotequal;2A87
-greaterdot;22D7
-notgreaterorslnteql;2271
-notlessorslnteql;2270
-notprecedesoreql;22E0
-notfollowsoreql;22E1
 notturnstile;22AC
 notsatisfies;22AD
 notsimilar;2241
-parallelshort;2225
 precedenotdbleqv;2AB9
 precedenotslnteql;2AB5
 precedeornoteqvlnt;22E8
 subsetornotdbleql;2ACB
 supersetornotdbleql;2ACC
 supersetnoteql;228B
-notsubseteql;2288
 Omegainv;2127
 notdblarrowright;21CF
+# ============================================== eufm, eufb (euler)
+dnos;1D521
+dalt;1D521
+fnos;1D523
+falt;1D523
+galt;1D524
+kalt;1D528
+talt;1D531
+ualt;1D532
+onealt;0031
+Yalt;1D51C
+Zalt;2128
 # ============================================== stmary (from stmaryrd package)
 llbracket;27E6
 rrbracket;27E7
-# ============================================== wasy
-lightning;21AF
-# ============================================== txsyc (from newtx package)
-circlebackslash;29B8
 # ============================================== CharterITC
 v.var;0076
 i.othershort;0069
-a.short;0061
-b.short;0062
-c.short;0063
-d.short;0064
-e.short;0065
-f.short;0066
-g.short;0067
-h.short;0068
-i.short;0069
-j.short;006A
-k.short;006B
-l.short;006C
-m.short;006D
-n.short;006E
-o.short;006F
-p.short;0070
-q.short;0071
-r.short;0072
-s.short;0073
-t.short;0074
-u.short;0075
-v.short;0076
-w.short;0077
-x.short;0078
-y.short;0079
-z.short;007A
 # ============================================== (WP) MathA font
 mat1;002B
 mat3;002D
@@ -455,10 +948,6 @@ mat211;1D7D9
 mat223;221A
 # ============================================== MathDesign Regular
 vartriangleleft;25c1
-# ============================================== MathDesign MathItalic
-hookrightchar;02d3
-hookleftchar;02d2
-# ============================================== MathDesign bolds
 notbar;2224
 emptysetstress;2205
 subsetnoteql;228A
@@ -473,33 +962,15 @@ notexistential;2204
 kappa1it;1d718
 dblarrowup;21c8
 arrowparrrightleft;21c4
-#Abbb;0041
-#Bbbb;0042
-#Cbbb;0043
-#Dbbb;0044
-#Ebbb;0045
-#Fbbb;0046
-#Gbbb;0047
-#Hbbb;0048
-#Ibbb;0049
-#Jbbb;004A
-#Kbbb;004B
-#Lbbb;004C
-#Mbbb;004D
-#Nbbb;004E
-#Obbb;004F
-#Pbbb;0050
-#Qbbb;0051
-#Rbbb;0052
-#Sbbb;0053
-#Tbbb;0054
-#Ubbb;0055
-#Vbbb;0056
-#Wbbb;0057
-#Xbbb;0058
-#Ybbb;0059
-#Zbbb;005A
-# The version below is more correct, but the original MathDesign encoding has been what it is above
+infinity1;221E
+# ============================================== MathDesign Symbol
+arrowaxishorizex;23AF
+# ============================================== MathDesign Extension
+intdisplaycirc;222E
+# ============================================== MathDesign MathItalic
+hookrightchar;02d3
+hookleftchar;02d2
+# ============================================== MathDesign bolds
 Abbb;1D538
 Bbbb;1D539
 Cbbb;2102
@@ -526,6 +997,7 @@ Wbbb;1D54E
 Xbbb;1D54F
 Ybbb;1D550
 Zbbb;2124
+kbbb;1D55C
 # ============================= Same as above, but with double 'b'
 Abb;1D538
 Bbb;1D539
@@ -553,167 +1025,128 @@ Wbb;1D54E
 Xbb;1D54F
 Ybb;1D550
 Zbb;2124
-# ============================================== Latin small caps
-#zero.sc;0030
-#one.sc;0031
-#two.sc;0032
-#three.sc;0033
-#four.sc;0034
-#five.sc;0035
-#six.sc;0036
-#seven.sc;0037
-#eight.sc;0038
-#nine.sc;0039
-#question.sc;003F
-#a.sc;0041
-#b.sc;0042
-#c.sc;0043
-#d.sc;0044
-#e.sc;0045
-#f.sc;0046
-#g.sc;0047
-#h.sc;0048
-#i.sc;0049
-#j.sc;004A
-#k.sc;004B
-#l.sc;004C
-#m.sc;004D
-#n.sc;004E
-#o.sc;004F
-#p.sc;0050
-#q.sc;0051
-#r.sc;0052
-#s.sc;0053
-#t.sc;0054
-#u.sc;0055
-#v.sc;0056
-#w.sc;0057
-#x.sc;0058
-#y.sc;0059
-#z.sc;005A
-# ============================================== Smallcaps
-afii10017s;0410
-afii10018s;0411
-afii10019s;0412
-afii10020s;0413
-afii10021s;0414
-afii10022s;0415
-afii10023s;0401
-afii10024s;0416
-afii10025s;0417
-afii10026s;0418
-afii10027s;0419
-afii10028s;041A
-afii10029s;041B
-afii10030s;041C
-afii10031s;041D
-afii10032s;041E
-afii10033s;041F
-afii10034s;0420
-afii10035s;0421
-afii10036s;0422
-afii10037s;0423
-afii10038s;0424
-afii10039s;0425
-afii10040s;0426
-afii10041s;0427
-afii10042s;0428
-afii10043s;0429
-afii10044s;042A
-afii10045s;042B
-afii10046s;042C
-afii10047s;042D
-afii10048s;042E
-afii10049s;042F
-# ============================================== Smallcaps, variant 2
-afii10017small;0410
-afii10018small;0411
-afii10019small;0412
-afii10020small;0413
-afii10021small;0414
-afii10022small;0415
-afii10023small;0401
-afii10024small;0416
-afii10025small;0417
-afii10026small;0418
-afii10027small;0419
-afii10028small;041A
-afii10029small;041B
-afii10030small;041C
-afii10031small;041D
-afii10032small;041E
-afii10033small;041F
-afii10034small;0420
-afii10035small;0421
-afii10036small;0422
-afii10037small;0423
-afii10038small;0424
-afii10039small;0425
-afii10040small;0426
-afii10041small;0427
-afii10042small;0428
-afii10043small;0429
-afii10044small;042A
-afii10045small;042B
-afii10046small;042C
-afii10047small;042D
-afii10048small;042E
-afii10049small;042F
+# ============================================== Cyrillic Smallcaps
+afii10017s;0430
+afii10018s;0431
+afii10019s;0432
+afii10020s;0433
+afii10021s;0434
+afii10022s;0435
+afii10023s;0431
+afii10024s;0436
+afii10025s;0437
+afii10026s;0438
+afii10027s;0439
+afii10028s;043A
+afii10029s;043B
+afii10030s;043C
+afii10031s;043D
+afii10032s;043E
+afii10033s;043F
+afii10034s;0440
+afii10035s;0441
+afii10036s;0442
+afii10037s;0443
+afii10038s;0444
+afii10039s;0445
+afii10040s;0446
+afii10041s;0447
+afii10042s;0448
+afii10043s;0449
+afii10044s;044A
+afii10045s;044B
+afii10046s;044C
+afii10047s;044D
+afii10048s;044E
+afii10049s;044F
+afii10017small;0430
+afii10018small;0431
+afii10019small;0432
+afii10020small;0433
+afii10021small;0434
+afii10022small;0435
+afii10023small;0431
+afii10024small;0436
+afii10025small;0437
+afii10026small;0438
+afii10027small;0439
+afii10028small;043A
+afii10029small;043B
+afii10030small;043C
+afii10031small;043D
+afii10032small;043E
+afii10033small;043F
+afii10034small;0440
+afii10035small;0441
+afii10036small;0442
+afii10037small;0443
+afii10038small;0444
+afii10039small;0445
+afii10040small;0446
+afii10041small;0447
+afii10042small;0448
+afii10043small;0449
+afii10044small;044A
+afii10045small;044B
+afii10046small;044C
+afii10047small;044D
+afii10048small;044E
+afii10049small;044F
 # ============================================== Small letters (small caps?)
-Asmall;0041
-Bsmall;0042
-Csmall;0043
-Dsmall;0044
-Esmall;0045
-Fsmall;0046
-Gsmall;0047
-Hsmall;0048
-Ismall;0049
-Jsmall;004A
-Ksmall;004B
-Lsmall;004C
-Msmall;004D
-Nsmall;004E
-Osmall;004F
-Psmall;0050
-Qsmall;0051
-Rsmall;0052
-Ssmall;0053
-Tsmall;0054
-Usmall;0055
-Vsmall;0056
-Wsmall;0057
-Xsmall;0058
-Ysmall;0059
-Zsmall;005A
-# ============================================== Calligraphy
-#Acal;0041
-#Bcal;0042
-#Ccal;0043
-#Dcal;0044
-#Ecal;0045
-#Fcal;0046
-#Gcal;0047
-#Hcal;0048
-#Ical;0049
-#Jcal;004A
-#Kcal;004B
-#Lcal;004C
-#Mcal;004D
-#Ncal;004E
-#Ocal;004F
-#Pcal;0050
-#Qcal;0051
-#Rcal;0052
-#Scal;0053
-#Tcal;0054
-#Ucal;0055
-#Vcal;0056
-#Wcal;0057
-#Xcal;0058
-#Ycal;0059
-#Zcal;005A
-# alt version
+Asmall;0061
+Bsmall;0062
+Csmall;0063
+Dsmall;0064
+Esmall;0065
+Fsmall;0066
+Gsmall;0067
+Hsmall;0068
+Ismall;0069
+Jsmall;006A
+Ksmall;006B
+Lsmall;006C
+Msmall;006D
+Nsmall;006E
+Osmall;006F
+Psmall;0070
+Qsmall;0071
+Rsmall;0072
+Ssmall;0073
+Tsmall;0074
+Usmall;0075
+Vsmall;0076
+Wsmall;0077
+Xsmall;0078
+Ysmall;0079
+Zsmall;007A
+# ============================================== Seem to be small caps; from HypatiaSansPro-Regular
+a.a;0061
+b.a;0062
+c.a;0063
+d.a;0064
+e.a;0065
+f.a;0066
+g.a;0067
+h.a;0068
+i.a;0069
+j.a;006A
+k.a;006B
+l.a;006C
+m.a;006D
+n.a;006E
+o.a;006F
+p.a;0070
+q.a;0071
+r.a;0072
+s.a;0073
+t.a;0074
+u.a;0075
+v.a;0076
+w.a;0077
+x.a;0078
+y.a;0079
+z.a;007A
+# ============================================== Calligraphy (Script)
 Acal;1D49C
 Bcal;212C
 Ccal;1D49E
@@ -741,39 +1174,162 @@ Xcal;1D4B3
 Ycal;1D4B4
 Zcal;1D4B5
 # ============================================== Accented cyrillic chars
-afii10065.var.accented;0430
-afii10066.var.accented;0431
-afii10067.var.accented;0432
-afii10068.var.accented;0433
-afii10069.var.accented;0434
-afii10070.var.accented;0435
-afii10071.var.accented;0451
-afii10072.var.accented;0436
-afii10073.var.accented;0437
-afii10074.var.accented;0438
-afii10075.var.accented;0439
-afii10076.var.accented;043A
-afii10077.var.accented;043B
-afii10078.var.accented;043C
-afii10079.var.accented;043D
-afii10080.var.accented;043E
-afii10081.var.accented;043F
-afii10082.var.accented;0440
-afii10083.var.accented;0441
-afii10084.var.accented;0442
-afii10085.var.accented;0443
-afii10086.var.accented;0444
-afii10087.var.accented;0445
-afii10088.var.accented;0446
-afii10089.var.accented;0447
-afii10090.var.accented;0448
-afii10091.var.accented;0449
-afii10092.var.accented;044A
-afii10093.var.accented;044B
-afii10094.var.accented;044C
-afii10095.var.accented;044D
-afii10096.var.accented;044E
-afii10097.var.accented;044F
+afii10065.var.accented;04300301
+afii10066.var.accented;04310301
+afii10067.var.accented;04320301
+afii10068.var.accented;04330301
+afii10069.var.accented;04340301
+afii10070.var.accented;04350301
+afii10071.var.accented;04510301
+afii10072.var.accented;04360301
+afii10073.var.accented;04370301
+afii10074.var.accented;04380301
+afii10075.var.accented;04390301
+afii10076.var.accented;043A0301
+afii10077.var.accented;043B0301
+afii10078.var.accented;043C0301
+afii10079.var.accented;043D0301
+afii10080.var.accented;043E0301
+afii10081.var.accented;043F0301
+afii10082.var.accented;04400301
+afii10083.var.accented;04410301
+afii10084.var.accented;04420301
+afii10085.var.accented;04430301
+afii10086.var.accented;04440301
+afii10087.var.accented;04450301
+afii10088.var.accented;04460301
+afii10089.var.accented;04470301
+afii10090.var.accented;04480301
+afii10091.var.accented;04490301
+afii10092.var.accented;044A0301
+afii10093.var.accented;044B0301
+afii10094.var.accented;044C0301
+afii10095.var.accented;044D0301
+afii10096.var.accented;044E0301
+afii10097.var.accented;044F0301
+# ============================================== Various (mostly Arabic) AFII codes (from TimesNewRomanPSMT)
+# afii57555;FBFC
+# afii57567;FB8E
+# afii62753;FE82
+# afii62754;FE84
+# afii62755;FE86
+# afii62756;FE88
+# afii62757;FE8B
+# afii62758;FE8C
+# afii62759;FE8A
+# afii62760;FE8E
+# afii62761;FE91
+# afii62762;FE92
+# afii62763;FE90
+# afii62764;FE94
+# afii62765;FE97
+# afii62766;FE98
+# afii62767;FE96
+# afii62768;FE9B
+# afii62769;FE9C
+# afii62770;FE9A
+# afii62771;FE9F
+# afii62772;FEA0
+# afii62773;FE9E
+# afii62774;FEA3
+# afii62775;FEA4
+# afii62776;FEA2
+# afii62777;FEA7
+# afii62778;FEA8
+# afii62779;FEA6
+# afii62780;FEAA
+# afii62781;FEAC
+# afii62782;FEAE
+# afii62783;FEB0
+# afii62784;FEB3
+# afii62785;FEB4
+# afii62786;FEB2
+# afii62787;FEB7
+# afii62788;FEB8
+# afii62789;FEB6
+# afii62790;FEBB
+# afii62791;FEBC
+# afii62792;FEBA
+# afii62793;FEBF
+# afii62794;FEC0
+# afii62795;FEBE
+# afii62796;FEC3
+# afii62797;FEC4
+# afii62798;FEC2
+# afii62799;FEC7
+# afii62800;FEC8
+# afii62801;FEC6
+# afii62802;FECB
+# afii62803;FECC
+# afii62804;FECA
+# afii62805;FECF
+# afii62806;FED0
+# afii62807;FECE
+# afii62808;FED3
+# afii62809;FED4
+# afii62810;FED2
+# afii62811;FED7
+# afii62812;FED8
+# afii62813;FED6
+# afii62815;FEDC
+# afii62816;FEDA
+# afii62817;FEDF
+# afii62818;FEE0
+# afii62819;FEDE
+# afii62820;FEE3
+# afii62821;FEE4
+# afii62822;FEE2
+# afii62823;FEE7
+# afii62824;FEE8
+# afii62825;FEE6
+# afii62827;FEEC
+# afii62828;FEEA
+# afii62829;FEEE
+# afii62830;FEF0
+# afii62831;FEF3
+# afii62832;FEF4
+# afii62833;FEF2
+# afii62834;FEF5
+# afii62835;FEF6
+# afii62836;FEF7
+# afii62837;FEF8
+# afii62838;FEF9
+# afii62839;FEFA
+# afii62840;FEFB
+# afii62841;FEFC
+# afii62843;06F4
+# afii62844;06F5
+# afii62845;06F6
+# afii62881;E818
+# afii62882;FC5E
+# afii62883;FC5F
+# afii62884;FC60
+# afii62885;FC61
+# afii62886;FC62
+# afii62956;FB58
+# afii62958;FB57
+# afii62959;FB7C
+# afii62960;FB7D
+# afii62961;FB7B
+# afii62962;FB8B
+# afii62964;FB8F
+# afii62965;FB94
+# afii62966;FB95
+# afii62967;FB93
+# afii64060;FD3E
+# afii64061;FD3F
+# afii64184;FDF2
+# ============================================== Numbers
+0;0030
+1;0031
+2;0032
+3;0033
+4;0034
+5;0035
+6;0036
+7;0037
+8;0038
+9;0039
 # ============================================== Override 'old style' glyph UVs
 zerooldstyle;0030
 oneoldstyle;0031
@@ -807,37 +1363,6 @@ six.o;0036
 seven.o;0037
 eight.o;0038
 nine.o;0039
-# ---
-T_h;00540068
-t_t;00740074
-f_t;00660074
-# --- These seem to be small caps; found in HypatiaSansPro-Regular
-a.a;0041
-b.a;0042
-c.a;0043
-d.a;0044
-e.a;0045
-f.a;0046
-g.a;0047
-h.a;0048
-i.a;0049
-j.a;004A
-k.a;004B
-l.a;004C
-m.a;004D
-n.a;004E
-o.a;004F
-p.a;0050
-q.a;0051
-r.a;0052
-s.a;0053
-t.a;0054
-u.a;0055
-v.a;0056
-w.a;0057
-x.a;0058
-y.a;0059
-z.a;005A
 # ============================================== Extended cyrillic
 cyrObar;04e8
 cyrobar;04e9
@@ -873,39 +1398,8 @@ VertBar1;007c
 #Ze;042d
 #ya;044f
 #Ya;042f
-# ============================================== Glyph names used by TeX fonts
-AE;00C6
-Complex;2102
-Delta;2206
-Delta1;2206
-Gamma;0393
-Gamma1;0393
-Ifractur;2111
-Lambda;039B
-Lambda1;039B
-Natural;2115
-OE;0152
-Omega;2126
-Omega1;2126
-Oslash;00D8
-Phi;03A6
-Phi1;03A6
-Pi;03A0
-Psi;03A8
-Psi1;03A8
-Real;211D
-Rfractur;211C
-Sigma;03A3
-Sigma1;03A3
-Theta;0398
-Theta1;0398
-Upsilon;03A5
-Xi;039E
-Zinteger;2124
-acute;00B4
-ae;00E6
-aleph;2135
-alpha;03B1
+
+# ============================================== Brackets
 angbracketleft;27E8
 angbracketleftBig;27E8
 angbracketleftBigg;27E8
@@ -936,50 +1430,6 @@ anglerightbig6;232A
 anglerightbig7;232A
 anglerightbig8;232A
 anglerightbig9;232A
-approxequal;2248
-#arrowboth;21C6
-arrowboth;2194
-arrowbothv;2195
-arrowbt;2193
-arrowdblboth;21D4
-arrowdblbothv;21D5
-arrowdblbt;21D3
-arrowdbldown;21D3
-arrowdblleft;21D0
-arrowdblright;21D2
-arrowdbltp;21D1
-arrowdblup;21D1
-arrowdown;2193
-arrowhookleft;02D3
-arrowhookright;02D2
-arrowleft;2190
-arrowleftbothalf;21BD
-arrowlefttophalf;21BC
-arrownortheast;2197
-arrownorthwest;2196
-arrowright;2192
-arrowrightbothalf;21C1
-arrowrighttophalf;21C0
-arrowsoutheast;2198
-arrowsouthwest;2199
-arrowtp;2191
-arrowup;2191
-arrowvertexdbl;2225
-asteriskmath;2217
-asymptequal;2243
-backslash;005C
-backslashBig;005C
-backslashBigg;005C
-backslashbig;005C
-backslashbigg;005C
-bar;007C
-barex;007C
-bardbl;2016
-beta;03B2
-bracehtipdownleft;25DC
-bracehtipdownright;25DD
-bracehtipupleft;25DF
-bracehtipupright;25DE
 braceleft;007B
 braceleftBig;007B
 braceleftBigg;007B
@@ -994,12 +1444,6 @@ braceleftbig7;007B
 braceleftbig8;007B
 braceleftbig9;007B
 braceleftbigg;007B
-braceleftbt;23A9
-braceleft.bot;23A9
-braceleftmid;23A8
-braceleft.mid;23A8
-bracelefttp;23A7
-braceleft.top;23A7
 braceright;007D
 bracerightBig;007D
 bracerightBigg;007D
@@ -1014,12 +1458,23 @@ bracerightbig7;007D
 bracerightbig8;007D
 bracerightbig9;007D
 bracerightbigg;007D
+bracehtipdownleft;25DC
+bracehtipdownright;25DD
+bracehtipupleft;25DF
+bracehtipupright;25DE
+braceleftbt;23A9
+braceleft.bot;23A9
+braceleftmid;23A8
+braceleft.mid;23A8
+bracelefttp;23A7
+braceleft.top;23A7
 bracerightbt;23AD
 braceright.bot;23AD
 bracerightmid;23AC
 braceright.mid;23AC
 bracerighttp;23AB
 braceright.top;23AB
+braceex;23AA
 bracketleftBig;005B
 bracketleftBigg;005B
 bracketleftbig;005B
@@ -1052,188 +1507,38 @@ bracketrightbigg;005D
 bracketrightbt;230B
 bracketrightex;23A5
 bracketrighttp;2309
-breve;02D8
-bullet;2022
-Bullet;25CF
-caron;02C7
-cedilla;00B8
 ceilingleft;2308
 ceilingleftBig;2308
 ceilingleftBigg;2308
 ceilingleftbig;2308
+ceilingleftbig2;2308
+ceilingleftbig3;2308
+ceilingleftbig4;2308
 ceilingleftbigg;2308
 ceilingright;2309
 ceilingrightBig;2309
 ceilingrightBigg;2309
 ceilingrightbig;2309
+ceilingrightbig2;2309
+ceilingrightbig3;2309
+ceilingrightbig4;2309
 ceilingrightbigg;2309
-chi;03C7
-Circle;25CB
-circlecopyrt;20DD
-circledivide;2298
-circledot;2299
-circledotdisplay;2299
-circledottext;2299
-circleminus;2296
-circlemultiply;2297
-circlemultiplydisplay;2297
-circlemultiplytext;2297
-circleplus;2295
-circleplusdisplay;2295
-circleplustext;2295
-circumflex;02C6
-circumflexnosp;0302
-circumflexnosp2char;1DCD
-circumflexnosp3char;1DCD
-circumflexnosp4char;1DCD
-club;2663
-comma;002C
-contintegraldisplay;222E
-contintegraltext;222E
-coproduct;2210
-coproductdisplay;2210
-coproducttext;2210
-dcurly;23DF
-dcurlyleft;23DF
-dcurlymid;23DF
-dcurlyright;23DF
-udcurlymod;23DF
-dotminus;2238
-dagger;2020
-daggerdbl;2021
-delta;03B4
-#diamond;2666
-diamond;25C7
-#diamondmath;22C4
-diamondmath;25C7
-diamondsolid;25C6
-dieresis;00A8
-divide;00F7
-dotaccent;02D9
-dotlessi;0131
-dotlessj;0237
-downslope;29F9
-eightoldstyle;0038
-element;2208
-emdash;2014
-emptyset;2205
-endash;2013
-epsilon1;1D716
-#epsilon1;03B5
-epsilon;03B5
-equal1;003D
-equivalence;2261
-equivasymptotic;224D
-eta;03B7
-exclamdown;00A1
-existential;2203
-ff;FB00
-ffi;FB03
-ffl;FB04
-fi;FB01
-fiveoldstyle;0035
-fl;FB02
-flat;266D
 floorleft;230A
 floorleftBig;230A
 floorleftBigg;230A
 floorleftbig;230A
-floorleftbigg;230A
 floorleftbig1;230A
+floorleftbig2;230A
 floorleftbig3;230A
+floorleftbigg;230A
 floorright;230B
 floorrightBig;230B
 floorrightBigg;230B
 floorrightbig;230B
-floorrightbigg;230B
 floorrightbig1;230B
+floorrightbig2;230B
 floorrightbig3;230B
-follows;227B
-followsequal;227D
-fouroldstyle;0034
-gamma;03B3
-germandbls;00DF
-grave;0060
-greaterequal;2265
-greaterorequalslant;2A7E
-greatermuch;226B
-harpoonleftright;21cb
-harpoonrightleft;21cc
-hatwide;005E
-hatwide1;005E
-hatwide2;005E
-hatwide3;005E
-hatwide4;005E
-hatwide5;005E
-hatwide6;005E
-hatwide7;005E
-hatwide8;005E
-hatwide9;005E
-hatwide10;005E
-hatwide11;005E
-hatwide12;005E
-hatwide13;005E
-hatwider;005E
-hatwidest;005E
-heart;2665
-hungarumlaut;02DD
-infinity;221E
-integerdivide;005C
-integral;222B
-integralloop;222E
-integraldisplay;222B
-integraldisplay1;222B
-integraldisplay2;222B
-integraldisplay3;222B
-integraldisplay4;222B
-integraldisplay5;222B
-integraldisplay6;222B
-integraldisplay7;222B
-integraldisplay8;222B
-integraldisplay9;222B
-integraltext;222B
-intersection;2229
-intersectiondisplay;22C2
-intersectionsq;2293
-intersectiontext;22C2
-iota;03B9
-kappa;03BA
-kappascript;03F0
-lambda;03BB
-latticetop;22A4
-lefrightline;23AF
-lessequal;2264
-lessorequalslant;2A7D
-lessmuch;226A
-logicaland;2227
-logicalanddisplay;2227
-logicalandtext;2227
-logicalnot;00AC
-logicalor;2228
-logicalordisplay;2228
-logicalortext;2228
-lscript;2113
-macron;00AF
-#mapsto;2E20 --- wrong as this code is a punctuation symbol
-mapsto;22A6
-minus;2212
-Minus;2212
-minusplus;2213
-mu;00B5
-multiply;00D7
-nabla;2207
-natural;266E
-negationslash;0338
-nineoldstyle;0039
-notapproxequal;2247
-nu;03BD
-oe;0153
-omega;03C9
-oneoldstyle;0031
-openbullet;25E6
-oslash;00F8
-owner;220B
-paragraph;00B6
+floorrightbigg;230B
 parenleftBig;0028
 parenleftBigg;0028
 parenleftbig;0028
@@ -1266,34 +1571,48 @@ parenrightbigg;0029
 parenrightbt;23A0
 parenrightex;239F
 parenrighttp;239E
-partialdiff;2202
-period;002E
-periodcentered;00B7
-period.numerator;00B7
-perpendicular;22A5
-perthousandzero;2080
-# ---------------------
-# The phi/phi1 codes were swapped in Unicode 3.0 (Unicode Technical Report #25)
-phi;03D5
-phi1;03C6
-phiscript;03C6
-# ---------------------
-pi1;03D6
-pi;03C0
-plusminus;00B1
-precedes;227A
-prime;2032
-productdisplay;220F
-producttext;220F
-propersubset;2282
-propersuperset;2283
-proportional;221D
-psi;03C8
-questiondown;00BF
-quotedblleft;201C
-quotedblright;201D
-quoteleft;2018
-quoteright;2019
+dcurly;23DF
+dcurlyleft;23DF
+dcurlymid;23DF
+dcurlyright;23DF
+udcurlymod;23DF
+# ============================================== Other multi-size chars
+backslash;005C
+backslashBig;005C
+backslashBigg;005C
+backslashbig;005C
+backslashbigg;005C
+hat4;02C6
+hat5;02C6
+hat6;02C6
+hatwide;02C6
+hatwide1;02C6
+hatwide2;02C6
+hatwide3;02C6
+hatwide4;02C6
+hatwide5;02C6
+hatwide6;02C6
+hatwide7;02C6
+hatwide8;02C6
+hatwide9;02C6
+hatwide10;02C6
+hatwide11;02C6
+hatwide12;02C6
+hatwide13;02C6
+hatwider;02C6
+hatwidest;02C6
+integral;222B
+integraldisplay;222B
+integraldisplay1;222B
+integraldisplay2;222B
+integraldisplay3;222B
+integraldisplay4;222B
+integraldisplay5;222B
+integraldisplay6;222B
+integraldisplay7;222B
+integraldisplay8;222B
+integraldisplay9;222B
+integraltext;222B
 radical;221A
 radicalBig;221A
 radicalBigg;221A
@@ -1311,22 +1630,6 @@ radicalbigg;221A
 radicalbt;221A
 radicallow;221A
 radicaltp;250C
-radicalvertex;2502
-reflexsubset;2286
-reflexsuperset;2287
-rho1;03F1
-rho;03C1
-ring;02DA
-section;00A7
-sevenoldstyle;0037
-sharp;266F
-shortleftarrow;2190
-shortrightarrow;2192
-sigma1;03C2
-sigma;03C3
-similar;223C
-similarequal;2243
-sixoldstyle;0036
 slash;002F
 slash.left;002F
 slashBig;002F
@@ -1337,9 +1640,235 @@ slashbig2;002F
 slashbig3;002F
 slashbig4;002F
 slashbigg;002F
+tilde;02DC
+tilde4;02DC
+tilde5;02DC
+tilde6;02DC
+tildewide;02DC
+tildewide1;02DC
+tildewide2;02DC
+tildewide3;02DC
+tildewide4;02DC
+tildewide5;02DC
+tildewide6;02DC
+tildewide7;02DC
+tildewide8;02DC
+tildewide9;02DC
+tildewider;02DC
+tildewidest;02DC
+# ============================================== Glyph names used by TeX fonts
+AE;00C6
+Complex;2102
+Delta1;2206
+Gamma1;0393
+Ifractur;2111
+Lambda1;039B
+Natural;2115
+OE;0152
+Omega1;2126
+Oslash;00D8
+Phi1;03A6
+Pi;03A0
+Psi1;03A8
+Real;211D
+Rfractur;211C
+Sigma1;03A3
+Theta1;0398
+Upsilon;03A5
+Xi;039E
+Zinteger;2124
+acute;00B4
+ae;00E6
+alpha;03B1
+approxequal;2248
+arrowboth;2194
+arrowbothv;2195
+arrowbt;2193
+arrowdblboth;21D4
+arrowdblbothv;21D5
+arrowdblbt;21D3
+arrowdbldown;21D3
+arrowdblleft;21D0
+arrowdblright;21D2
+arrowdbltp;21D1
+arrowdblup;21D1
+arrowdown;2193
+arrowhorizex;23AF
+arrowhookleft;02D3
+arrowhookright;02D2
+arrowleft;2190
+arrowlefttophalf;21BC
+arrownortheast;2197
+arrownorthwest;2196
+arrowright;2192
+arrowrightbothalf;21C1
+arrowsoutheast;2198
+arrowsouthwest;2199
+arrowtp;2191
+arrowup;2191
+asteriskmath;2217
+asymptequal;2243
+bar;007C
+barex;007C
+bardbl;2016
+beta;03B2
+breve;02D8
+bullet;2022
+Bullet;25CF
+caron;02C7
+cedilla;00B8
+chi;03C7
+Circle;25CB
+circlecopyrt;20DD
+circledivide;2298
+circledot;2299
+circledotdisplay;2299
+circledottext;2299
+circleminus;2296
+circlemultiply;2297
+circlemultiplydisplay;2297
+circlemultiplytext;2297
+circleplus;2295
+circleplusdisplay;2295
+circleplustext;2295
+circumflex;02C6
+club;2663
+comma;002C
+contintegraldisplay;222E
+contintegraltext;222E
+coproduct;2210
+coproductdisplay;2210
+coproducttext;2210
+dotminus;2238
+dagger;2020
+daggerdbl;2021
+delta;03B4
+diamondmath;25C7
+diamondsolid;25C6
+dieresis;00A8
+divide;00F7
+dotaccent;02D9
+dotlessi;0131
+dotlessj;0237
+downslope;29F9
+eightoldstyle;0038
+element;2208
+emdash;2014
+emptyset;2205
+endash;2013
+#epsilon1;03B5
+#epsilon1;1D716
+epsilon1;03F5
+epsilon;03B5
+equal1;003D
+equivalence;2261
+equivasymptotic;224D
+eta;03B7
+exclamdown;00A1
+existential;2203
+ff;FB00
+ffi;FB03
+ffl;FB04
+fi;FB01
+fiveoldstyle;0035
+fl;FB02
+flat;266D
+follows;227B
+fouroldstyle;0034
+gamma;03B3
+germandbls;00DF
+grave;0060
+greaterequal;2265
+greaterorequalslant;2A7E
+greatermuch;226B
+harpoonleftright;21cb
+harpoonrightleft;21cc
+heart;2665
+hungarumlaut;02DD
+infinity;221E
+intersection;2229
+intersectiondisplay;22C2
+intersectiontext;22C2
+iota;03B9
+kappa;03BA
+kappascript;03F0
+lambda;03BB
+latticetop;22A4
+lefrightline;23AF
+lessequal;2264
+lessorequalslant;2A7D
+lessmuch;226A
+logicaland;2227
+logicalanddisplay;2227
+logicalandtext;2227
+logicalnot;00AC
+logicalor;2228
+logicalordisplay;2228
+logicalortext;2228
+lscript;2113
+macron;00AF
+# mapsto;2E20 --- wrong as this code is a punctuation symbol
+# mapsto;22A6
+mapstochar;27FC
+minus;2212
+Minus;2212
+minusplus;2213
+multiply;00D7
+nabla;2207
+natural;266E
+negationslash;0338
+nineoldstyle;0039
+nu;03BD
+oe;0153
+omega;03C9
+oneoldstyle;0031
+openbullet;25E6
+oslash;00F8
+owner;220B
+paragraph;00B6
+partialdiff;2202
+period;002E
+periodcentered;00B7
+period.numerator;00B7
+perthousandzero;2080
+# ---------------------
+# The phi/phi1 codes were swapped in Unicode 3.0 (Unicode Technical Report #25)
+phi;03D5
+phi1;03C6
+phiscript;03C6
+# ---------------------
+pi1;03D6
+pi;03C0
+plusminus;00B1
+precedes;227A
+prime;2032
+productdisplay;220F
+producttext;220F
+propersubset;2282
+propersuperset;2283
+proportional;221D
+questiondown;00BF
+quotedblleft;201C
+quotedblright;201D
+quoteleft;2018
+quoteright;2019
+reflexsubset;2286
+reflexsuperset;2287
+rho;03C1
+rho1;03F1
+ring;02DA
+section;00A7
+sevenoldstyle;0037
+sharp;266F
+shortleftarrow;2190
+shortrightarrow;2192
+sigma;03C3
+sigma1;03C2
+similar;223C
+similarequal;2243
+sixoldstyle;0036
 slurabove;2322
 slurbelow;2323
-smile;2323
 spade;2660
 square;25A1
 square5;25A0
@@ -1348,32 +1877,15 @@ squareimage;228F
 squareoriginal;2290
 star;22C6
 sterling;00A3
-subsetornotdbleql;2ACB
-subsetornoteql;2ACB
 subsetsqequal;2291
 summationdisplay;2211
 summationtext;2211
 supersetsqequal;2292
 suppress;0337
 tau;03C4
-theta1;03D1
 thetascript;03D1
-theta;03B8
 threeoldstyle;0033
 tie;2040
-tilde;02DC
-tildewide;0360
-tildewide1;0360
-tildewide2;0360
-tildewide3;0360
-tildewide4;0360
-tildewide5;0360
-tildewide6;0360
-tildewide7;0360
-tildewide8;0360
-tildewide9;0360
-tildewider;0360
-tildewidest;0360
 triangle;25B3
 triangleinv;25BD
 triangleleft;25C1
@@ -1388,9 +1900,6 @@ uniondisplay;22C3
 unionmulti;228E
 unionmultidisplay;228E
 unionmultitext;228E
-unionsq;2294
-unionsqdisplay;2294
-unionsqtext;2294
 uniontext;22C3
 universal;2200
 upsilon;03C5
@@ -1398,8 +1907,6 @@ upslope;29F8
 varepsilon;03B5
 varphi;03C6
 vector;20D7
-vextenddouble;2016
-vextendsingle;007C
 weierstrass;2118
 wreathproduct;2240
 xi;03BE

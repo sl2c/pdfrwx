@@ -7,7 +7,7 @@ from sly import Lexer, Parser
 
 class PdfStreamSyntax:
 
-    '''see PDF Ref. sec. 4.1; order is important: BT should preceed B, for example'''
+    '''see PDF Ref. sec. 4.1; order is important: BT should precede B, for example'''
 
     white_spaces_raw = r"\x00\t\n\x0c\r\x20"
     white_spaces = "\x00\t\n\x0c\r\x20"
@@ -294,5 +294,4 @@ class PdfStream:
             return f'{obj:.10f}'.rstrip('0').rstrip('.')
         else:
             return f'{obj}'
-
 

@@ -3,10 +3,9 @@
 from pdfrw import PdfDict
 
 from .common import err, warn, msg
-from .pdffont import PdfFont, PdfTextString
+from .pdffont import PdfFont, PdfTextString, PdfFontGlyphMap
 from .pdfstate import PdfState
 from .pdfstreameditor import PdfStreamEditor
-from .pdffontglyphmap import PdfFontGlyphMap
 
 class PdfRender(PdfStreamEditor):
 

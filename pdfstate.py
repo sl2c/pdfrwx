@@ -5,8 +5,7 @@ import re
 from pdfrw import PdfDict, PdfName
 
 from .common import err, warn, msg
-from .pdffont import PdfFont, PdfTextString
-from .pdffontglyphmap import PdfFontGlyphMap
+from .pdffont import PdfFont, PdfTextString, PdfFontGlyphMap
 from .pdfgeometry import VEC, MAT, BOX
 
 class PdfState:

@@ -531,10 +531,12 @@ class PdfImage(AttrDict):
 
                 pil = Image.open(BytesIO(stream))
                 self.set_pil(pil)
+                self.jpeg = stream # original
 
             elif obj.Filter == '/JPXDecode':
 
                 self.read_jp2_to_array(stream)
+                self.jp2 = stream # original
 
             else:
                 raise ValueError(f'bad filter: {obj.Filter}')
@@ -643,7 +645,8 @@ class PdfImage(AttrDict):
             cs = self.ColorSpace
 
         if debug: msg(f'applying image colorspace: {PdfColorSpace.toStr(cs)}')
-        self.apply_colorspace(cs, self.SMask) # Mask is needed to unmultiply alpha if necessary
+
+        modified = self.apply_colorspace(cs, self.SMask) # Mask is needed to unmultiply alpha if necessary
 
         # # Apply page default colorspace
         # try:
@@ -657,6 +660,8 @@ class PdfImage(AttrDict):
         self.isRendered = True
         if debug: msg('rendering ended')
 
+        return modified
+
     # -------------------------------------------------------------------------------------- apply_colorspace()
 
     def apply_colorspace(self, cs:CS_TYPE, mask:PdfDict = None):
@@ -666,6 +671,8 @@ class PdfImage(AttrDict):
         defaultDecode = PdfDecodeArray.get_default(cs, self.bpc)
 
         cs_name = PdfColorSpace.get_name(cs)
+
+        modified = False
 
         if cs_name == '/Indexed':
 
@@ -702,6 +709,8 @@ class PdfImage(AttrDict):
             self.bpc = 8
             self.Decode = None
 
+            modified = True
+
         elif cs_name in ['/Separation', '/DeviceN', '/NChannel'] \
                 or actualDecode != defaultDecode \
                 or mask != None and mask.Matte != None:
@@ -710,6 +719,10 @@ class PdfImage(AttrDict):
             self.set_array(array)
             self.bpc = 8
             self.Decode = None
+
+            modified = True
+
+        return modified
 
     # -------------------------------------------------------------------------------------- change_mode()
 
@@ -959,8 +972,9 @@ class PdfImage(AttrDict):
             pil = self.get_pil()
 
             if render:
-                msg('rendering pil')
-                self.render()
+                modified = self.render()
+                if modified:
+                    msg(f'rendered pil')
                 if addAlpha and self.get_mode() not in ['L', 'RGB']:
                     self.change_mode('RGB' if self.get_mode() != '1' else 'L', intent)
                 pil = self.get_pil()
@@ -984,15 +998,23 @@ class PdfImage(AttrDict):
 
             bs = BytesIO()
             Q = Q if Q else 'keep' if pil.format == 'JPEG' and Format == 'JPEG' else 100
-            msg(f'saving with Format = {Format}, Q = {Q}')
             # tiff_compression = 'group4' if pil.mode == '1' else 'tiff_lzw' if Format == 'TIFF' else None
             tiff_compression = 'group4' if pil.mode == '1' else 'tiff_adobe_deflate' if Format == 'TIFF' else None
             icc_profile = pil.info.get('icc_profile') if pil.info and embedProfile else None
 
             dpi = self.dpi if self.dpi not in (None, (1,1)) else (72,72)
 
+            stream = None
+
             if Format == 'JPEG':
-                pil.save(bs, Format, quality=Q, optimize = optimize, icc_profile = icc_profile, info = pil.info, dpi=dpi)
+                # !!! THIS IS DUPLICATE LOGIC (SEE ABOVE FOR THE SAME MESSAGE) !!!
+                if self.jpeg:
+                    msg(f'saving original (unmodified) JPEG file')
+                    stream = self.jpeg
+                else:
+                    msg(f'saving with Format = {Format}, Q = {Q}')
+                    pil.save(bs, Format, quality=Q, optimize = optimize, icc_profile = icc_profile,
+                                info = pil.info, dpi=dpi)
             elif Format == 'PNG':
                 pil.save(bs, Format, optimize = optimize, icc_profile = icc_profile)
             elif Format == 'TIFF':
@@ -1000,12 +1022,15 @@ class PdfImage(AttrDict):
             else:
                 raise ValueError(f'format not supported in saveAs(): {Format}')
  
-            stream = bs.getvalue()
+            if stream is None:
+                stream = bs.getvalue()
 
             # A bug found in some JPEG files
-            if Format == 'JPEG' and stream[-2:] != b'\xff\xd9':
-                raise ValueError('bad JPEG stream')
-                # stream += b'\xff\xd9'
+            if Format == 'JPEG':
+                s = stream.rstrip(b'\n')
+                if s[-2:] != b'\xff\xd9':
+                    raise ValueError(f'bad JPEG stream tail: {s[-10:]}')
+                     # stream += b'\xff\xd9'
 
         return stream, ext[Format]
 
@@ -1386,8 +1411,10 @@ class PdfImage(AttrDict):
             open(T('temp.jp2'),'wb').write(jp2)
             jp2k = Jp2k(T('temp.jp2'))          # call print(jp2k) to inspect the boxes
 
-            # Get the data
+            # Debug
             # print(jp2k)
+
+            # Get the data
             try: bpc = int(jp2k.box[2].box[0].bits_per_component)
             except:
                 try: bpc = int(jp2k.box[3].box[0].bits_per_component)
@@ -1406,7 +1433,9 @@ class PdfImage(AttrDict):
 
             # Get the colorspace
             try: EnumCS = jp2k.box[2].box[1].colorspace
-            except: EnumCS = jp2k.box[3].box[1].colorspace
+            except:
+                try: EnumCS = jp2k.box[3].box[1].colorspace
+                except: EnumCS = None
 
             if EnumCS != None:
                 cs_name = {12:'CMYK', 16:'RGB', 17:'Gray', 18:'YCC', 20:'e-sRGB', 21:'ROMM-RGB'}.get(EnumCS)
@@ -1414,8 +1443,14 @@ class PdfImage(AttrDict):
                     raise ValueError(f'unsupported JPX colorspace: {cs_name}')
                 cs = PdfName('Device' + cs_name)
             else:
-                icc_profile = jp2k.box[3].box[1].icc_profile
-                cs = PdfColorSpace.make_icc_based_colorspace(icc_profile, N = SImage.nColors(data))
+                nColors = SImage.nColors(data)
+                try: icc_profile = jp2k.box[3].box[1].icc_profile
+                except: icc_profile = None
+                if icc_profile is not None:
+                    cs = PdfColorSpace.make_icc_based_colorspace(icc_profile, N = nColors)
+                else:
+                    nColors2cs = {3:'RGB', 4:'CMYK'}
+                    cs = nColors2cs.get(nColors)
 
         return data, cs, bpc
 
@@ -1812,14 +1847,6 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
             msg(f'converting colorspace: {image.get_mode()} --> {mode}')
             modified = image.change_mode(mode, intent)
 
-        if options.bitonal and image.get_mode() != '1':
-            image.render(pdfPage = pdfPage)
-            cs_name = PdfColorSpace.get_name(image.ColorSpace)
-            msg(f'converting {cs_name} --> 1')
-            image.change_mode('L', intent)
-            image = PdfImage(array = SImage.toBitonal(image.get_array(), threshold = options.threshold))
-            modified = True
-
         if options.upsample:
             if PdfColorSpace.get_name(image.ColorSpace) == '/Indexed':
                 image.render()
@@ -1833,6 +1860,14 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
                 image.render()
             msg(f'resampling: factor = {f}, method = bicubic')
             image.set_array(SImage.resize(image.get_array(), int(image.w() * f), int(image.h() * f)))
+            modified = True
+
+        if options.bitonal and image.get_mode() != '1':
+            image.render(pdfPage = pdfPage)
+            cs_name = PdfColorSpace.get_name(image.ColorSpace)
+            msg(f'converting {cs_name} --> 1')
+            image.change_mode('L', intent)
+            image = PdfImage(array = SImage.toBitonal(image.get_array(), threshold = options.threshold))
             modified = True
 
     if options.zip:
@@ -1852,6 +1887,7 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
         image_obj.Decode = obj.Decode
         image_obj.Width = obj.Width
         image_obj.Height = obj.Height
+        image_obj.Interpolate = PdfObject('true') if options.interpolate else None
 
     # print('obj:')
     # print(obj)
@@ -1903,6 +1939,8 @@ if __name__ == '__main__':
     ap.add_argument('-bounds', type=str, metavar='B', default='none', choices=['softmax','local','none'], help='bounds for the upsampling algo, B=softmax|local|none, def=none')
 
     ap.add_argument('-descreen', type=float, metavar='C', help='descreen images; try confidence C = 3 (in units of stand. dev.)')
+
+    ap.add_argument('-interpolate', action='store_true', help='set /Interpolate flag on images')
 
     options = ap.parse_args()
 

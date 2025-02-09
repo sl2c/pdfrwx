@@ -11,12 +11,10 @@ from typing import Callable
 from pdfrw import PdfReader, PdfWriter, PdfArray, PdfDict, IndirectPdfDict, PdfName
 
 from .common import err,msg,warn,eprint, encapsulate, get_box
-from .pdffont import PdfFont, PdfTextString
-from .pdffontencoding import PdfFontEncoding
+from .pdffont import PdfFont, PdfTextString, PdfFontEncoding, PdfFontGlyphMap
 from .pdfstreamparser import PdfStream
 from .djvusedparser import DjVuSedLexer, DjVuSedParser
 from .pdfstate import PdfState
-from .pdffontglyphmap import PdfFontGlyphMap
 from .pdffilter import PdfFilter
 from .pdfimage import PdfImage
 from .pdfgeometry import VEC, MAT, BOX

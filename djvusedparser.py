@@ -2,35 +2,37 @@
 
 from sly import Lexer, Parser
 
+# ========================================================================== class DjVuSedSymbol
+
+class DjVuSedSymbol:
+
+    def __init__(self, name:str):
+        self.name = name
+
+    def __repr__(self):
+        return self.name
+
 # ========================================================================== class DjVuSedLexer
 
 class DjVuSedLexer(Lexer):
     '''A lexer for djvused files'''
 
     # Set of token names. This is always required
-    tokens = {BOOKMARKS, SELECT, REMOVE_TXT, SET_TXT, SAVE, PERIOD, TYPE, INTEGER, STRING, LPAREN, RPAREN}
+    tokens = {SYMBOL, INTEGER, STRING, LPAREN, RPAREN, PERIOD}
 
     # ignore (single) chars
     ignore = "\x00\t\n\x0c\r\x20" + ';'
 
-    # ignored patterns
-    ignore_comment = r'#.*'
+    # ignored patterns; avoid removing SYMBOLs which can also start
+    ignore_comment = r'#(?![0-9A-F]{6}\b).*'
 
-    # commands
-    BOOKMARKS = r'bookmarks'
-    SELECT = r'select'
-    REMOVE_TXT = r'remove-txt'
-    SET_TXT = r'set-txt'
-    SAVE = r'save'
-
-    PERIOD = r'\.'
-
-    TYPE = r'page|column|region|para|line|word|char'
+    SYMBOL = r"[_#a-zA-Z][_#\-a-zA-Z0-9]*"
     INTEGER = r"\d+"
-    # SYMBOL = r"[a-zA-Z_#][a-zA-Z0-9_#\-]*"
-    STRING = r'"([a-zA-Z0-9а-яА-ЯёЁ«»№ !#$%&\'()*+,\-./:;<=>?@\[\]^_`{|}~ª-힣]|\\[0-9]{1,3}|\\[abtnvfr\\"])*"'
+    # STRING = r'"([a-zA-Z0-9а-яА-ЯёЁ«»№ !#$%&\'()*+,\-./:;<=>?@\[\]^_`{|}~ª-힣]|\\[0-9]{1,3}|\\[abtnvfr\\"])*"'
+    STRING = r'"([^\\"]|\\[0-9]{1,3}|\\[abtnvfr\\"])*"'
     LPAREN = r'\('
     RPAREN = r'\)'
+    PERIOD = r'\.'
 
     def error(self, t):
         raise ValueError(f'lexing error: illegal character {t.value[0]} at index {self.index}')
@@ -44,83 +46,187 @@ class DjVuSedParser(Parser):
     # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ stream & chunks
 
     # Stream
-    @_('[ chunks ] [ SAVE ]')
+    @_('[ chunks ]')
     def stream(self, p):
-        result = p.chunks if p.chunks else []
-        if p.SAVE: result.append([p.SAVE])
-        return result
+        return p.chunks if p.chunks else []
 
     # chunks
     @_('chunk { chunk }')
-    def chunks(self, p): return [p.chunk0] + p.chunk1
+    def chunks(self, p):
+        return [p.chunk0] + p.chunk1
 
     # chunk
-    @_('bookmarks_chunk', 'ocr_chunk')
-    def chunk(self, p): return p[0]
-
-    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ bookmarks chunk
-
-    # bookmarks_cmd
-    @_('LPAREN BOOKMARKS [ bm_lines ] RPAREN')
-    def bookmarks_chunk(self, p): return [p.BOOKMARKS, p.bm_lines]
-
-    # bm_lines
-    @_('bm_line { bm_line }')
-    def bm_lines(self, p): return [p.bm_line0] + p.bm_line1
-
-    # bm_lines
-    @_('LPAREN STRING STRING [ bm_lines ] RPAREN')
-    def bm_line(self, p):return [p.STRING0, p.STRING1, p.bm_lines] if p.bm_lines else [p.STRING0, p.STRING1]
-
-    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ ocr chunk
-
-    # ocr_chunk
-    @_('select_page_cmd [ commands ]')
-    def ocr_chunk(self, p): return p.select_page_cmd + (p.commands if p.commands else [])
-
-    # select_page_cmd
-    @_('SELECT [ INTEGER ]')
-    def select_page_cmd(self, p): return [p.SELECT, p.INTEGER]
-
-    # commands
-    @_('command { command }')
-    def commands(self, p): return [p.command0] + p.command1
+    @_('command', 'period')
+    def chunk(self, p):
+        return p[0]
 
     # command
-    @_('remove_txt_cmd','set_txt_cmd')
-    def command(self, p): return p[0]
+    @_('symbol [ args ]')
+    def command(self, p):
+        return [p.symbol] + (p.args if p.args else [])
 
-    # remove_txt_cmd
-    @_('REMOVE_TXT')
-    def remove_txt_cmd(self, p): return [p.REMOVE_TXT]
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ command arguments: entities except symbols
 
-    # set_txt_cmd
-    @_('SET_TXT ocr_text_block PERIOD')
-    def set_txt_cmd(self, p): return [p.SET_TXT, p.ocr_text_block]
+    # args
+    @_('arg { arg }')
+    def args(self, p):
+        return [p.arg0] + p.arg1
 
-    # --------------- ocr text blocks
+    # arg
+    @_('integer', 'string', 'list')
+    def arg(self, p):
+        return p[0]
 
-    # ocr_text_block
-    @_('LPAREN TYPE INTEGER INTEGER INTEGER INTEGER [ operand ] RPAREN')
-    def ocr_text_block(self, p): return [p.TYPE,p.INTEGER0,p.INTEGER1,p.INTEGER2,p.INTEGER3,p.operand]
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ lists
 
-    # operand
-    @_('STRING', 'ocr_text_blocks')
-    def operand(self, p): return p[0]
+    # list
+    @_('LPAREN [ entities ] RPAREN')
+    def list(self, p):
+        return p.entities if p.entities else []
 
-    # text_blocks
-    @_('ocr_text_block { ocr_text_block }')
-    def ocr_text_blocks(self, p): return [p.ocr_text_block0] + p.ocr_text_block1
+    # entities
+    @_('entity { entity }')
+    def entities(self, p):
+        return [p.entity0] + p.entity1
 
-    # --------------- errors
+    # entity
+    @_('symbol', 'integer', 'string', 'list')
+    def entity(self, p):
+        return p[0]
 
-    # ERROR token (from lexer)
-    # this is different from error() func below which is called when illegal parsing state occurs
-    # @_('ERROR')
-    # def error_token(self, p): err(f'ERROR token: {p[0]}')
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ basic types
 
-    # Error
+    #     def symbol(self, p):
+
+    @_('SYMBOL')
+    def symbol(self, p):
+        return DjVuSedSymbol(p[0])
+
+    # integer
+    @_('INTEGER')
+    def integer(self, p):
+        return int(p[0])
+
+    # string
+    @_('STRING')
+    def string(self, p):
+        '''
+        Converts djvused strings to Unicode strings; see DjVuSed.d2u() for more info.
+        '''
+        s = p[0][1:-1]
+        # u2d() takes care of the Unicode djvused files (those produced by djvused -u)
+        s = DjVuSed.d2u(DjVuSed.u2d(s, escape = False))
+        return s
+
+    # period
+    @_('PERIOD')
+    def period(self, p):
+        return [DjVuSedSymbol('.')]
+
+    # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ error
+
+    # error
     def error(self, p):
         raise ValueError(f'parsing error at token {p}')
 
+# ========================================================================== class PdfStream
+
+class DjVuSed:
+    '''The class provides (static) functions:
+    
+    stream_to_tree()
+    tree_to_stream()
+
+    for translation between the djvused stream and djvused tree representations.
+    '''
+
+    @staticmethod
+    def stream_to_tree(stream:str):
+        '''
+        '''
+        assert isinstance(stream, str)
+        lexer, parser = DjVuSedLexer(), DjVuSedParser()
+        tokens = lexer.tokenize(stream)
+        tree = parser.parse(tokens)
+        return tree
+
+    @staticmethod
+    def tree_to_stream(tree, unicodeStrings:bool = False):
+        '''
+        Convert djvused tree to stream. Setting `unicodeStrings = True` will produce
+        Unicode strings in the stream, as with `djvused -u`.
+        '''
+        result = []
+        for leaf in tree:
+            if not isinstance(leaf, list):
+                raise ValueError(f'leaf is not a list: {leaf}')
+            result.append(DjVuSed._obj_to_string(leaf,
+                                                 parenthesizeLists = False,
+                                                 unicodeStrings = unicodeStrings))
+        return '\n'.join(result)
+
+    @staticmethod
+    def _obj_to_string(obj,
+                       indent:int = 0,
+                       parenthesizeLists:bool = True,
+                       unicodeStrings:bool = False):
+        '''
+        '''
+        prefix = lambda e: ('\n' + ' '*indent) if isinstance(e, list) else ''
+        s = ' '*indent
+        if isinstance(obj, DjVuSedSymbol):
+            return obj.name
+        if isinstance(obj, str):
+            s = DjVuSed.u2d(obj)
+            if unicodeStrings:
+                s = DjVuSed.d2u(s, escape=True)
+            return '"' + s + '"'
+        if isinstance(obj, int):
+            return f'{obj}'
+        if isinstance(obj, list):
+            if not isinstance(obj[0], DjVuSedSymbol):
+                raise TypeError(f'first list element not a symbol: {obj}')
+            obj2str = lambda e: DjVuSed._obj_to_string(e,
+                                                        indent = indent+1,
+                                                        parenthesizeLists = True,
+                                                        unicodeStrings = unicodeStrings)
+            r = ' '.join(prefix(e) + obj2str(e) for e in obj)
+            if parenthesizeLists:
+                r = '(' + r + ')'
+            return r
+        raise ValueError(f'unrecognized object type: {obj}')
+
+    @staticmethod
+    def d2u(djvuSedString:str, escape:bool = False):
+        '''
+        Convert a djvused string (backslash & double quotes chars are escaped, non-ASCII chars are
+        written as octals: `\\123`) to a Unicode string.
+
+        If you want to keep backslash and double quotes still escaped in the result, set `escape = True`.
+        '''
+        s = djvuSedString.encode('latin1').decode('unicode-escape').encode('latin1').decode('utf-8', errors='replace')
+        if escape:
+            s = ''.join(DjVuSed._escapeChar(c) for c in s)
+        return s
+
+    @staticmethod
+    def u2d(unicodeStr:str, escape:bool = True):
+        '''
+        Convert a Unicode string to a djvused string
+        (backslash & double quotes chars are escaped, non-ASCII chars are written as octals: `\\123`).
+
+        If `unicodeStr` has all backslashes & double quotes already escaped, set `escape = False`
+        to avoid escaping them again.
+        '''
+        toOct = lambda u: ''.join(f'\\{n:03o}' for n in u.encode('utf-8'))
+        return ''.join(toOct(u) if not (32 <= ord(u) < 127) else DjVuSed._escapeChar(u) if escape else u
+                        for u in unicodeStr)
+    
+    @staticmethod
+    def _escapeChar(c:str):
+        '''
+        Escapes backslashes and double quotes
+        '''
+        special = {'"':'\\"', '\\':'\\\\'}
+        return special.get(c) or c
 

@@ -11,13 +11,11 @@ from typing import Callable
 from pdfrw import PdfReader, PdfWriter, PdfArray, PdfDict, IndirectPdfDict, PdfName
 
 from .common import err,msg,warn,eprint, encapsulate
-from .pdffont import PdfFont, PdfTextString, PdfFontUtils
-from .pdffontencoding import PdfFontEncoding
+from .pdffont import PdfFont, PdfTextString, PdfFontUtils, PdfFontEncoding, PdfFontGlyphMap
 from .pdfstreamparser import PdfStream
 from .pdfstreameditor import PdfStreamEditor
-from .djvusedparser import DjVuSedLexer, DjVuSedParser
+from .djvusedparser import DjVuSedSymbol, DjVuSed
 from .pdfstate import PdfState
-from .pdffontglyphmap import PdfFontGlyphMap
 from .pdffilter import PdfFilter
 
 import xml.etree.ElementTree as ET # for parsing hOCR files
@@ -31,77 +29,50 @@ class DjVuSedEditor:
     def __init__(self, djvuSedStream:str):
         '''Parses the djvuSedStream and stores the resulting djvused page tree in self.tree'''
         self.stream = djvuSedStream
-        lexer,parser = DjVuSedLexer(),DjVuSedParser()
-        tokens = lexer.tokenize(self.stream)
-        # for tok in tokens: print(tok)
-        # sys.exit()
-        self.tree = parser.parse(tokens)
-        # pprint.pprint(self.tree)
-        # sys.exit()
+        self.tree = DjVuSed.stream_to_tree(self.stream)
 
-    def djvuSedStringToUnicode(self, djvuSedString:str):
-        '''Convert an ASCII-encoded string from a djvused stream to a Unicode string
-        '''
-        s = djvuSedString
-        if len(s) < 2 or s[0] != '"' or s[-1] != '"': err(f'invalid stirng: {s}')
-        return s[1:-1].encode('latin1').decode('unicode-escape').encode('latin1').decode('utf-8')
-
-    def unicodeToDjvuSedString(self, unicodeStr:str):
-        '''Convert a Unicode string to am ASCII-encoded string (non-ASCII chars are octal-escaped as \\123)
-        to be used in a djvused stream
-        '''
-        # return ''.join(chr(b) if b<128 and b>=32 and b!=134 and b!=42 else f'\\{b:o}' for b in unicodeStr.encode('utf-8'))
-        # No idea why the "and b!=134 and b!=42" part was inserted
-        return ''.join(chr(b) if b<128 and b>=32 else f'\\{b:o}' for b in unicodeStr.encode('utf-8'))
-
-    # def djvusedPageTreeToPDFStream(self, djvusedPageTree:list, font:PdfFont, fontsize = None, baseline_y = None, debug = False):
     def djvusedPageTreeToPDFStream(self, djvusedPageTree:list, font:PdfFont, baseline_y = None, scale_y = None):
-
-        '''Convert annotations in the parsed djvusedPageTree to a PDF stream.
+        '''
+        Convert annotations in the parsed djvusedPageTree to a PDF stream.
         The djvusedPageTree can be an arbitrary set of annotation commands that relates to a single page, that is
-        anything between two consecutive "select pageNo" commands in the original djvused stream.'''
+        anything between two consecutive "select pageNo" commands in the original djvused stream.
+        '''
+
+        RATIO = 4 # assumed ascent/descent ratio
+        BASELINE = lambda ymin, ymax: int(round((RATIO*ymax + ymin)/(RATIO + 1)))
 
         stream = ''
+
         for chunk in djvusedPageTree:
-            if len(chunk) != 6: err(f'set-txt chunk has #elements != 6: {chunk}')
-            type,xmin,ymin,xmax,ymax,text = chunk # note that always ymax < ymin, this is just bad naming
-            if type == 'line':
-                baseline_y = int(round(0.2*(4*int(ymax) + 1*int(ymin))))
-                scale_y = int(ymin)- int(ymax)
+            
+            symbol,xmin,ymin,xmax,ymax = chunk[:5] # note that always ymax < ymin, this is just bad naming
+
+            assert isinstance(symbol, DjVuSedSymbol)
+
+            if symbol.name == 'line':
+                baseline_y = BASELINE(ymin, ymax)
+                scale_y = int(ymin - ymax)
+
+            text = chunk[5] if len(chunk) == 6 and isinstance(chunk[5],str) else chunk[5:]
+
             if isinstance(text,str) and len(text)>0:
 
-                textNormalized = text
-                textNormalized = self.unicodeToDjvuSedString(text) # This extends djvused format to allow Unicode strings
-                textUnicode = self.djvuSedStringToUnicode(textNormalized)
-
-                if len(textUnicode) == 0: continue
-                pdfString = font.encodePdfTextString(textUnicode)
-                stringWidth = font.width(textUnicode)
+                if len(text) == 0: continue
+                pdfString = font.encodePdfTextString(text)
+                stringWidth = font.width(text)
                 if stringWidth == 0: continue
 
                 scale_x = int(round(float(xmax)-float(xmin))/stringWidth)
 
-                # if fontsize != None and fontsize_new > fontsize and len(textUnicode)<3:
-                #     fontsize_new = fontsize
-                if baseline_y == None:  baseline_y = int(round(0.2*(4*int(ymax) + 1*int(ymin))))
-                if scale_y == None: scale_y = int(ymin)-int(ymax)
+                if baseline_y == None:  baseline_y = BASELINE(ymin, ymax)
+                if scale_y == None: scale_y = int(ymin - ymax)
 
-                # stream += f'BT /OCR {fontsize_new} Tf {xmin} {baseline_y:.1f} Td {invisible}{hexString} Tj ET\n'
                 stream += f'{scale_x} 0 0 {scale_y} {xmin} {baseline_y} Tm {pdfString} Tj\n'
 
-                # if len(textUnicode)>=5: fontsize = fontsize_new
+            if isinstance(text, list):
 
-            elif isinstance(text,list):
-                # if type == 'line': # test run to determine fontsize
-                #     streamDelta,fontsize = self.djvusedPageTreeToPDFStream(chunk[5],font,None,baseline_y,debug)
-                # streamDelta,fontsize = self.djvusedPageTreeToPDFStream(chunk[5],font,fontsize,baseline_y,debug)
-                # stream += streamDelta
-                stream += self.djvusedPageTreeToPDFStream(chunk[5], font, baseline_y, scale_y)
-            elif text is None:
-                continue
-            else:
-                err('set-txt: chunk\'s last element is neither of: string/list/None: {chunk}')
-        # return stream, fontsize
+                stream += self.djvusedPageTreeToPDFStream(text, font, baseline_y, scale_y)
+
         return stream
 
     def insert_ocr(self, pdf:PdfReader, defaultUnicodeFont:str, defaultFontDir:str, firstPage = 1, debug = False):
@@ -112,45 +83,54 @@ class DjVuSedEditor:
         if not font: raise ValueError(f'cannot proceed with inserting an OCR layer: no font loaded')
         xobjCache = {}
 
-        # Run over pages in the djvusedTree
-        for djvusedPage in self.tree:
+        pdfPage = None
+        ocrStream = None
 
-            if djvusedPage[0] == 'save': continue
-            if djvusedPage[0] != 'select': err(f'expected select, got: {djvusedPage[0]}')
-            try: pageNo = int(djvusedPage[1]) + firstPage - 1
-            except: pageNo = firstPage
+        for cmd in self.tree:
 
-            if pageNo < 1 or pageNo > len(pdf.pages):
-                err(f'pageNo ({pageNo}) is outside pdf page range (1-{len(pdf.pages)})')
-            eprint(f'inserting OCR in page {pageNo}')
-            pdfPage = pdf.pages[pageNo-1]
-            
-            # Fix missing Contents
-            if pdfPage.Contents == None:
-                pdfPage.Contents = IndirectPdfDict(stream = '')
+            if cmd[0].name == 'select':
+    
+                try: pageNo = int(cmd[1]) + firstPage - 1
+                except: pageNo = firstPage
+                if pageNo < 1 or pageNo > len(pdf.pages):
+                    err(f'pageNo ({pageNo}) is outside pdf page range (1-{len(pdf.pages)})')
+    
+                if pdfPage != None and ocrStream == None:
+                    warn('select command not followed by set-txt')
 
-            # Remove old OCR
-            resources = pdfPage.inheritable.Resources
-            if resources == None: resources = PdfDict(); pdfPage.Resources = resources
-            pdfEditor = PdfStreamEditor(pdfPage, PdfFontGlyphMap())
-            pdfEditor.processText(xobjCache=xobjCache, options={'removeOCR':True})
+                eprint(f'inserting OCR in page {pageNo}')
+                pdfPage = pdf.pages[pageNo-1]
+                ocrStream = None
 
-            djvusedPageCommands = djvusedPage[2:]
-            ocrStream = None
-            for djvusedCmd in djvusedPageCommands:
-                # assert syntax
-                if djvusedCmd[0] != 'set-txt': continue
-                djvusedPageTree = djvusedCmd[1]
-                if djvusedPageTree[0] != 'page': err('argument of set-txt should be a single page chunk')
+            if cmd[0].name == 'set-txt':
 
-                # Get the stream
-                # ocrStream,fontsize = self.djvusedPageTreeToPDFStream([djvusedPageTree],font,None,None,debug)
+                if ocrStream != None:
+                    err('multiple set-txt commands on the same page')
+
+                if pdfPage == None:
+                    err(f'set-text before select')
+
+                # Fix missing Contents
+                if pdfPage.Contents == None:
+                    pdfPage.Contents = IndirectPdfDict(stream = '')
+
+                # Remove old OCR
+                resources = pdfPage.inheritable.Resources
+                if resources == None: resources = PdfDict(); pdfPage.Resources = resources
+                glyphMap = PdfFontGlyphMap(loadAdobeGlyphList = True)
+                pdfEditor = PdfStreamEditor(pdfPage, glyphMap = glyphMap, makeSyntheticCmap = True)
+                pdfEditor.processText(xobjCache=xobjCache, options={'removeOCR':True})
+
+                if len(cmd) != 2 or cmd[1][0].name != 'page':
+                    err('argument of set-txt should be a single page chunk')
+
+                pageChunk = cmd[1]
 
                 invisible = '' if debug else ' 3 Tr'
-                ocrStream = f'BT /OCR 1 Tf{invisible}\n' + self.djvusedPageTreeToPDFStream([djvusedPageTree],font,None,None) + 'ET\n'
+                ocrStream = f'BT /OCR 1 Tf{invisible}\n' + self.djvusedPageTreeToPDFStream([pageChunk],font,None,None) + 'ET\n'
 
                 # Get the scale factors
-                xmin,ymin,xmax,ymax = [float(a) for a in djvusedPageTree[1:5]]
+                xmin,ymin,xmax,ymax = [float(a) for a in pageChunk[1:5]]
                 width,height = xmax - xmin, ymax - ymin
                 bbox = pdfPage.inheritable.CropBox or pdfPage.inheritable.MediaBox
                 if bbox == None: err(f'No page bbox on page {pageNo}')
@@ -161,25 +141,21 @@ class DjVuSedEditor:
                 else:
                     sx,sy = (x2-x1)/width,(y2-y1)/height
 
-                break
+                # Set up a font to be used for the OCR layer
+                font.install(pdfPage,'OCR', overwrite=True)
 
-            if ocrStream == None: warn('no set-text command after select') ; continue           
+                # Write the geometry part of the OCR PDF stream header; account for pdf page rotations
+                # TEST THIS MORE !!!!
+                ocrHeader = f'q 1 0 0 1 {x1} {y1} cm\n{sx} 0 0 {sy} 0 0 cm\n'
+                if pdfPage.inheritable.Rotate == '270': ocrHeader += f'0 -1 1 0 0 {width} cm\n'
+                if pdfPage.inheritable.Rotate == '180': ocrHeader += f'-1 0 0 -1 {width} {height} cm\n'
+                if pdfPage.inheritable.Rotate == '90': ocrHeader += f'0 1 -1 0 {height} 0 cm\n'
+                ocrHeader += f'1 0 0 1 {-xmin} {-ymin} cm\n'
+                ocrStream = ocrHeader + ocrStream + 'Q\n'
 
-            # Set up a font to be used for the OCR layer
-            font.install(pdfPage,'OCR', overwrite=True)
-
-            # Write the geometry part of the OCR PDF stream header; account for pdf page rotations
-            # TEST THIS MORE !!!!
-            ocrHeader = f'q 1 0 0 1 {x1} {y1} cm\n{sx} 0 0 {sy} 0 0 cm\n'
-            if pdfPage.inheritable.Rotate == '270': ocrHeader += f'0 -1 1 0 0 {width} cm\n'
-            if pdfPage.inheritable.Rotate == '180': ocrHeader += f'-1 0 0 -1 {width} {height} cm\n'
-            if pdfPage.inheritable.Rotate == '90': ocrHeader += f'0 1 -1 0 {height} 0 cm\n'
-            ocrHeader += f'1 0 0 1 {-xmin} {-ymin} cm\n'
-            ocrStream = ocrHeader + ocrStream + 'Q\n'
-
-            ocrContents = IndirectPdfDict(stream = ocrStream)
-            if not isinstance(pdfPage.Contents,PdfArray): pdfPage.Contents = [pdfPage.Contents]
-            pdfPage.Contents = [ocrContents] if debug else [ocrContents] + pdfPage.Contents
+                ocrContents = IndirectPdfDict(stream = ocrStream)
+                if not isinstance(pdfPage.Contents,PdfArray): pdfPage.Contents = [pdfPage.Contents]
+                pdfPage.Contents = [ocrContents] if debug else [ocrContents] + pdfPage.Contents
 
         return pdf
 
