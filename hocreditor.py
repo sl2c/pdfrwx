@@ -11,7 +11,7 @@ from typing import Callable
 from pdfrw import PdfReader, PdfWriter, PdfArray, PdfDict, IndirectPdfDict, PdfName
 
 from .common import err,msg,warn,eprint, encapsulate
-from .pdffont import PdfFont, PdfTextString, PdfFontEncoding, PdfFontGlyphMap
+from .pdffont import PdfFont, PdfTextString, PdfFontGlyphMap
 from .pdfstreamparser import PdfStream
 from .djvusedparser import DjVuSedLexer, DjVuSedParser
 from .pdfstate import PdfState

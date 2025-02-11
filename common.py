@@ -124,6 +124,9 @@ def pdfObjSize(obj:PdfObject, cache:set = set()):
         size = int(obj.Length) if obj.Length != None else 0
         overhead = DICT_OVERHEAD
 
+        if obj.Subtype == PdfName.Form:
+            return size, overhead
+
         # Inherit page items
         INHERITABLE = [PdfName.Resources, PdfName.Rotate, PdfName.MediaBox, PdfName.CropBox]
         items = {k:v for k,v in obj.items()}
@@ -135,8 +138,10 @@ def pdfObjSize(obj:PdfObject, cache:set = set()):
                         items[name] = inherited
 
         for k,v in items.items():
-            # Do not traverse up the page tree or to other pages
-            if k == PdfName.Parent or isinstance(v,PdfDict) and v.Type == PdfName.Page: s,o = 0,0
+            # Do not traverse up the page tree or to other pages/XObject Forms/Images
+            subtypes = [PdfName.Form, PdfName.Image, PdfName.Type1, PdfName.MMType1, PdfName.TrueType, PdfName.Type3, PdfName.Type0]
+            if k == PdfName.Parent or isinstance(v,PdfDict) and (v.Type == PdfName.Page or v.Subtype in subtypes):
+                    s,o = 0,0
             else: s,o = pdfObjSize(v, cache)
             if isinstance(v,IndirectPdfDict): o += REF_OVERHEAD
             size += s; overhead += len(k) + o + 2 # 2 separators

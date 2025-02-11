@@ -42,7 +42,7 @@ def PdfObjects(object, name:str = '', cache:set = None, debug = False):
     '''
 
     # Check the cache
-    if cache == None: cache = set()
+    if cache is None: cache = set()
     if id(object) in cache: return
     cache.add(id(object))
 
