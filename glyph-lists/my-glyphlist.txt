@@ -1,5 +1,6 @@
 # Some extra glyph names that were encountered
 .notdef;FFFD
+.null;0000
 # ============================================== Redefine Greek
 Delta;0394
 Omega;03A9
@@ -311,6 +312,8 @@ ddddotacc;20DC
 transpose;1D40
 hermitconj;1D34
 nPerp;2AEB0338
+# ============================================== LiteraturnayaT1
+hyphenchar;002D
 # =======================================================================================================
 # MS WORD FONTS
 # ============================================== Times New Roman
@@ -860,7 +863,6 @@ subsetornotdbleql;2ACB
 supersetornotdbleql;2ACC
 supersetnoteql;228B
 Omegainv;2127
-notdblarrowright;21CF
 # ============================================== eufm, eufb (euler)
 dnos;1D521
 dalt;1D521
@@ -1742,6 +1744,7 @@ coproducttext;2210
 dotminus;2238
 dagger;2020
 daggerdbl;2021
+dblarrowleft;21D0
 delta;03B4
 diamondmath;25C7
 diamondsolid;25C6
@@ -1809,6 +1812,7 @@ lscript;2113
 macron;00AF
 # mapsto;2E20 --- wrong as this code is a punctuation symbol
 # mapsto;22A6
+mapsto;27FC
 mapstochar;27FC
 minus;2212
 Minus;2212
