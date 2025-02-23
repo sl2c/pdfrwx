@@ -235,7 +235,7 @@ class PdfFontCore14:
         '/ZapfDingbats': (0, 0)
         }
 
-   # A map from aliases to stanard names
+   # A map from aliases to standard names
     CORE14_FONTNAMES_ALIASES = {
         '/CourierNew':'/Courier', '/CourierNew,Italic':'/Courier-Oblique',
         '/CourierNew,Bold':'/Courier-Bold', '/CourierNew,BoldItalic':'/Courier-BoldOblique',
@@ -383,6 +383,7 @@ class PdfFontCore14:
 
 class PdfFontEncodingStandards:
 
+    @staticmethod
     def get_cc2glyphname(encodingName:str):
         '''
         Returns a cc2glyphname map (with cc as char) for the given encodingName,
@@ -392,6 +393,7 @@ class PdfFontEncodingStandards:
         encodingVector = PdfFontEncodingStandards.encodingVectors[encodingName]
         return {chr(i):PdfName(encodingVector[i]) for i in range(256) if encodingVector[i] != None}
     
+    @staticmethod
     def invert_cc2glyphname(cc2glyphname:dict[str, PdfName], encodingName:str):
         '''
         Invert cc2glyphname map; special care is taken when encodingName == '/WinAnsiEncoding'
@@ -605,8 +607,6 @@ class PdfFontGlyphMap:
                          gname,
                          stdGlyphMap:dict[str,str] = {},
                          isType3:bool = False,
-                         baseInvMap:dict[PdfName,str] = {},
-                         explicitMap:dict[PdfName,str] = {},
                          mapComposites:bool = True,
                          mapSemicolons:bool = True):
         '''
@@ -618,12 +618,6 @@ class PdfFontGlyphMap:
         if gname == '/.notdef': return chr(0xFFFD) # Unicode: Replacement Char
 
         result = None
-
-        if gname in baseInvMap:
-            return ord(baseInvMap[gname])
-
-        if gname in explicitMap:
-            return explicitMap[gname]
         
         if isType3:
             result = PdfFontGlyphMap.type3_gname_to_cc(gname=gname,
@@ -983,7 +977,9 @@ class PdfFontCMap:
             if len(rangeList) % 3 != 0: err(f'bfrange: not a whole number of triplets in a bfrange block: {block}')
  
             # Increment last char of a string (sames as incrementing the last byte, but faster; see PDF Ref. 1.7 p. 474)
-            INCREMENT = lambda s,i: (s[:-1] + chr(ord(s[-1]) + i)) if ord(s[-1])//256 == (ord(s[-1]) + i)//256 else None
+            INCREMENT = lambda s,i: chr(ord(s)+i) if len(s) == 1 \
+                            else (s[:-1] + chr(ord(s[-1]) + i)) if ord(s[-1])//256 == (ord(s[-1]) + i)//256 \
+                            else None
 
             for i in range(0,len(rangeList),3):
                 start,end,u = rangeList[i:i+3]
@@ -1465,7 +1461,15 @@ class PdfFontDictFunc:
         are either set or unset, an exception is raised.
         '''
         try: Flags = int(PdfFontDictFunc.get_font_descriptor(font).Flags)
-        except: return None
+        except:
+            Flags = None
+            if PdfFontDictFunc.is_core14(font):
+                return PdfFontCore14.standard_fontname(font.BaseFont) in ['/Symbol', '/ZapfDingbats']
+
+        if Flags is None:
+            if font.Subtype == '/Type3':
+                return True
+            raise ValueError(f'no Flags: {PdfFontDictFunc.get_font_name(font)}')
 
         isSymbolic = (Flags & 4 == 4)
         isNonsymbolic = (Flags & 32 == 32)
@@ -1601,9 +1605,10 @@ class PdfFontDictFunc:
         else:
             dFont = font.DescendantFonts[0]
             s = []
-            if dFont.CIDToGIDMap: s.append('/CIDToGIDMap')
+            if cid2gid := dFont.CIDToGIDMap: s.append('/CIDToGIDMap' if isinstance(cid2gid, PdfDict) else (cid2gid or 'None'))
             if dFont.FontDescriptor.CIDSet: s.append('/CIDSet')
         return s
+
     # -------------------------------------------------------------------------------- get_encoding_name_string()
 
     @staticmethod
@@ -1615,6 +1620,16 @@ class PdfFontDictFunc:
         if len(s) == 0: return None
         elif len(s) == 1: return s[0]
         else: return '[' + ', '.join(s) +']'
+
+    # -------------------------------------------------------------------------------- get_base_encoding()
+
+    @staticmethod
+    def get_base_encoding(font:PdfDict):
+        '''
+        Returns font.Encoding.BaseEncoding if font.Encoding is a PdfDict, otherwise returns font.Encoding
+        '''
+        return font.Encoding.BaseEncoding if isinstance(font.Encoding, PdfDict) \
+                    else font.Encoding
 
     # -------------------------------------------------------------------------------- differences_to_cc2glyphname()
 
@@ -1691,7 +1706,8 @@ class PdfFontDictFunc:
                              cff:bytes = None,
                              ttf:bytes = None,
                              otf:bytes = None,
-                             makeCID:bool = False):
+                             makeCID:bool = False,
+                             isSymbolic:bool = None):
         '''
         Creates a font descriptor; consult PDF Ref. 1.7, sec. 5.8: Embedded Font Programs
         '''
@@ -1709,8 +1725,9 @@ class PdfFontDictFunc:
         Flags = 0
         if info.get('isFixedPitch'): Flags += 1
         if info.get('isSerif'): Flags += 2
-        Flags += 4 if info.get('isSymbolic') else 32
         if info.get('ItalicAngle') : Flags += 64
+
+        Flags += 4 if isSymbolic else 32
 
         # Create the font program
 
@@ -1969,11 +1986,13 @@ class PdfFontFile:
 
         if glyphSet is not None:
             gSet = PdfFontFile.distill_glyphSet(glyphSet)
-        elif glyf := ttFont.get('glyf'):
-            gSet = {g:glyf[g] for g in glyf.keys()}
         else:
-            warn(f'failed to obtain glyphSet: {fontName}')
-            gSet = {}
+            try:
+                glyf = ttFont.get('glyf')
+                gSet = {g:glyf[g] for g in glyf.keys()}
+            except:
+                warn(f'failed to obtain glyphSet: {fontName}')
+                gSet = {}
 
         getWidth = lambda glyph: glyph.width if hasattr(glyph, 'width') else 0
         info['gid2gname'] = {ttFont.getGlyphID(gname):gname for gname in gSet}
@@ -1988,9 +2007,9 @@ class PdfFontFile:
             for table in cmap.tables:
                 info[f'cmap{table.platformID}{table.platEncID}'] \
                     = {chr(code):gname for code,gname in table.cmap.items()}
-
-            info['isSymbolic'] = 'cmap30' in info
-            info['unicode2gname'] = ttFont.getBestCmap()
+ 
+            if u2g := ttFont.getBestCmap():
+                info['unicode2gname'] = u2g
 
         # Return the result
         return info
@@ -2070,25 +2089,25 @@ class PdfFontFile:
 
                 assert all(g[:3] == 'cid' or g == '.notdef' for g in chars.keys())
                 info['gid2gname'] = {(int(gname[3:]) if gname != '.notdef' else 0):gname for gname in chars.keys()}
-                info['CID-keyed'] = True
 
-            elif font.Encoding is not None: # Simple CFF
+            else: # Simple CFF
+                try: enc = font.Encoding
+                except Exception as e: warn(e); enc = None
 
-                if isinstance(font.Encoding, list):
+                if isinstance(enc, list):
 
-                    info['gid2gname'] = {i:gname for i,gname in enumerate(font.Encoding)
+                    info['gid2gname'] = {i:gname for i,gname in enumerate(enc)
                                         if gname != '.notdef' and (len(chars.keys()) == 0 or gname in chars.keys())}
 
-                elif isinstance(font.Encoding, str):
+                elif isinstance(enc, str):
 
                     trans = {'ExpertEncoding':'MacExpertEncoding'}
-                    enc = trans.get(font.Encoding, font.Encoding)
-                    if cc2g := PdfFontEncodingStandards.get_cc2glyphname(PdfName(enc)):
+                    if cc2g := PdfFontEncodingStandards.get_cc2glyphname(PdfName(trans.get(enc, enc))):
                         info['gid2gname'] = {ord(cc):g[1:] for cc,g in cc2g.items() if g[1:] in chars.keys()}
 
             if info.get('gid2gname') is None:
 
-                warn(f'bad CFF font encoding: {font.Encoding}')
+                warn(f'bad CFF font encoding: {FontName}')
                 info['gid2gname'] = {}
 
         else:
@@ -2248,17 +2267,16 @@ class PdfFont:
         # Set cmap_toUnicode (read from the font's ToUnicode dict)
         self.cmap_toUnicode = None
         if self.font.ToUnicode:
-            # try: self.cmap_toUnicode = PdfFontCMap(toUnicodeDict = self.font.ToUnicode) # /ToUnicode may be junk
-            # except: pass
-            self.cmap_toUnicode = PdfFontCMap(toUnicodeDict = self.font.ToUnicode) # /ToUnicode may be junk
-            if self.cmap_toUnicode == None: warn(f'failed to read ToUnicode CMap for font: {self.name}')
+            try: self.cmap_toUnicode = PdfFontCMap(toUnicodeDict = self.font.ToUnicode) # /ToUnicode may be junk
+            except Exception as e: warn(f'failed to read ToUnicode CMap for font: {self.name}: '+str(e))
 
         # An internal Unicode map (read from the font program)
         self.cmap_internal = None
         if u2g := self.info.get('unicode2gname'):
             self.cmap_internal = PdfFontCMap()
             g2u = {PdfName(g):u for u,g in u2g.items()}
-            self.cmap_internal.cc2unicode = {cc:chr(g2u[g]) for cc,g in self.cc2g.items() if g in g2u}
+            cc2g = self.cc2g_internal if self.cc2g_internal is not None else self.cc2g
+            self.cmap_internal.cc2unicode = {cc:chr(g2u[g]) for cc,g in cc2g.items() if g in g2u}
             self.cmap_internal.reset_unicode2cc()
 
         # Set cmap_synthetic: infer Unicode points based on glyph names using glyphMap
@@ -2294,10 +2312,17 @@ class PdfFont:
         '''
         if not self.font: return
 
+        fontName = PdfFontDictFunc.get_font_name(self.font)
+
+        if not PdfFontDictFunc.is_embedded(self.font) \
+            and self.font.Subtype != '/Type3' \
+            and not PdfFontDictFunc.is_core14(self.font):
+            warn(f'a non-Core14 font is not embedded: {self.font.Subtype} {fontName}')
+
         fd = PdfFontDictFunc.get_font_descriptor(self.font)
 
         if fd == None: return
-
+ 
         FontFile = fd.FontFile or fd.FontFile2 or fd.FontFile3
         if not FontFile: return
 
@@ -2331,24 +2356,28 @@ class PdfFont:
     # -------------------------------------------------------------------------------- parse_encoding()
 
     @staticmethod
-    def parse_encoding(Encoding:ENC_TYPE, info:dict):
+    def parse_encoding(Encoding:ENC_TYPE, isSymbolic:bool, info:dict):
         '''
         Parses `Encoding`, which is either a `PdfName` or a `PdfDict`, and returns a map from
         char codes (str) to glyphnames (PdfName)
         '''
         gid2gname = info.get('gid2gname') or {}
 
-        def parse_named_encoding(Encoding:PdfName, gid2gname:dict[int,str]) -> dict[str,PdfName]:
+        def parse_named_encoding(Encoding:PdfName, isSymbolic:bool, gid2gname:dict[int,str]) -> dict[str,PdfName]:
             '''
             PDF Ref. v1.7 sec. 5.5.5: Table 5.11:
             For a font program that is embedded in the PDF file, the implicit base
             encoding is the font program's built-in encoding [..]. Otherwise, for a nonsymbolic font,
             it is StandardEncoding, and for a symbolic font, it is the font's built-in encoding.
 
+            This is, actully, incorrect: in reality, the implicit encoding is determined
+            purely based on whether the font is symbolic or not.
+
             We assume that the built-in encoding of embedded fonts and the StandardEncoding/built-in
             encoding of non-embedded (Core14) fonts is already in gid2gname.
             '''
             cc2g = PdfFontEncodingStandards.get_cc2glyphname(Encoding) if Encoding \
+                else PdfFontEncodingStandards.get_cc2glyphname('/StandardEncoding') if not isSymbolic \
                 else {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
             if cc2g is None:
                 raise ValueError(f'invalid Encoding: {Encoding}')
@@ -2363,14 +2392,14 @@ class PdfFont:
             # If this entry is absent, the Differences entry describes differences from an implicit
             # base encoding.
 
-            cc2g = parse_named_encoding(Encoding.BaseEncoding, gid2gname)
+            cc2g = parse_named_encoding(Encoding.BaseEncoding, isSymbolic, gid2gname)
 
             if Encoding.Differences != None:
                 cc2g |= PdfFontDictFunc.differences_to_cc2glyphname(Encoding.Differences)
 
         else:
 
-            cc2g = parse_named_encoding(Encoding, gid2gname)
+            cc2g = parse_named_encoding(Encoding, isSymbolic, gid2gname)
             
         return cc2g
 
@@ -2393,6 +2422,7 @@ class PdfFont:
         cc2g_internal = None    # A map from character codes (chars) to glyph names, internal to TrueType fonts
 
         fontName = PdfFontDictFunc.get_font_name(font)
+        isSymbolic = PdfFontDictFunc.is_symbolic(font)
 
         # .............................................................. Classify font's Encoding
 
@@ -2401,6 +2431,7 @@ class PdfFont:
             # Get gid2gname
             if gid2gname := info.get('gid2gname'):
 
+                
                 cid2gid = {}
 
                 # Remap CIDs to GIDs if the CIDTOGID map exists
@@ -2413,32 +2444,51 @@ class PdfFont:
                     # Skip all null-codes (i.e. .notdefs), except for the code at cid=0, where an actual null code might be
                     cid2gid = {cid:gid for cid,gid in cid2gid.items() if gid != 0 or cid == 0}
 
+
                 # Append cids from CIDSet if it exists
                 CIDSet = font.DescendantFonts[0].FontDescriptor.CIDSet
                 if CIDSet:
+                    # PDF Ref 1.7, sec. 5.7.2, Table 5.21:
+                    # The [CIDSet] stream’s data is organized as a table of bits indexed by CID.
+                    # The bits should be stored in bytes with the high-order bit first.
+                    # Each bit corresponds to a CID. The most significant bit of the first byte corresponds to CID 0,
+                    # the next bit to CID 1, and so on.
                     byteStream = py23_diffs.convert_store(PdfFilter.uncompress(CIDSet).stream)
                     CIDSet = [(i*8 + j) for i,byte in enumerate(byteStream) for j,bit in enumerate(f'{byte:08b}') if bit == '1']
                     for cid in CIDSet:
                         if cid not in cid2gid: cid2gid[cid] = cid
 
+                if font.ToUnicode:
+                    CMap = PdfFontCMap(toUnicodeDict=font.ToUnicode)
+                    for cc in CMap.cc2unicode:
+                        if ord(cc) not in cid2gid: cid2gid[ord(cc)] = ord(cc)
+
                 # Create cc2g
-                if len(cid2gid) == 0:
+                if len(cid2gid) == 0 or len(cid2gid) == 1 and 0 in cid2gid:
                     # If cid2gid is empty, use built-in encoding
                     cc2g = {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
                 else:
                     cc2g = {chr(cid):PdfName(gid2gname.get(gid)) for cid,gid in cid2gid.items() if gid in gid2gname}
+                    if len(cc2g) == 0:
+                        cc2g = {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
+
+                if gname2width := self.info.get('gname2width'):
+                    cc2g = {cc:g for cc,g in cc2g.items() if g[1:] in gname2width}
 
         else: # Simple fonts
 
-            cc2g = PdfFont.parse_encoding(font.Encoding, info)
+            cc2g = PdfFont.parse_encoding(Encoding = font.Encoding, isSymbolic = isSymbolic, info = info)
             gname2width = info.get('gname2width')
 
             if font.Subtype == '/TrueType':
 
+                # PDF Ref. v1.7, sec. 5.5.5: Encoding of TrueType fonts (p.429)
+
                 if font.Encoding is None or PdfFontDictFunc.is_symbolic(font) is True:
 
-                    # TrueType fonts which are either Symbolic or lack Encoding.
-                    # When the Symbolic flag is set in a TrueType font the font.Encoding is ignored
+                    # Symbolic TrueType fonts: thos with the Symbolic flag or ones that lack Encoding.
+                    # PDF Ref: When the Symbolic flag is set in a TrueType font the font.Encoding is ignored
+
                     if cmap30 := info.get('cmap30'):
                         offset = PdfFontCMap.get_segment_offset(cmap30.keys())
                         if offset not in [0x0000, 0xf000, 0xf100, 0xf200]:
@@ -2451,10 +2501,18 @@ class PdfFont:
 
                 else:
 
-                    if cmap10 := info.get('cmap10'):
-                        stdRoman = PdfFontEncodingStandards.get_cc2glyphname('/StandardRomanEncoding')
-                        stdRomanInv = {gname:cc for cc,gname in stdRoman.items()}
+                    # Non-symbolic TrueType fonts
+
+                    cmap10 = None
                     cmap31 = info.get('cmap31')
+                    if cmap31 is None:
+                        cmap10 = info.get('cmap10')
+                        if cmap10 is not None:
+                            stdRoman = PdfFontEncodingStandards.get_cc2glyphname('/StandardRomanEncoding')
+                            stdRomanInv = {gname:cc for cc,gname in stdRoman.items()}
+
+                    # print('DEBUG:')
+                    # pprint(self.info)
 
                     mapGname = lambda g: (cmap31.get(AdobeGlyphMap.get(g)) or g[1:]) if cmap31 \
                                         else (cmap10.get(stdRomanInv.get(g)) or g[1:]) if cmap10 \
@@ -2555,6 +2613,8 @@ class PdfFont:
 
         FontName = re.sub(r'\s+', '', self.info['FontName'])
 
+        isSymbolic = encoding is None or isinstance(encoding, PdfDict) and encoding.BaseEncoding is None
+
         if self.ttf or self.otf:
             randomPrefix = ''.join(random.choice(string.ascii_uppercase) for _ in range(6))
             FontName = randomPrefix + '+' + FontName
@@ -2573,8 +2633,10 @@ class PdfFont:
             cidEncoded = self.info['ROS'] != None
             if cidEncoded != makeCID:
                 raise ValueError(f'cannot make a {"CID" if makeCID else "Type1C"} font from a {"" if cidEncoded else "non-"}CID-keyed CFF font: {FontName}')
-        if self.pfb and makeCID:
-            raise ValueError(f'cannot make a CID font out of a PFB font: {FontName}')
+        if self.pfb:
+            makeCID = False
+            if cc2unicode is not None:
+                warn(f'cc2unicode ignored: {FontName}')
 
         # PDF Ref.: "[A FontFile3 with the /OpenType Subtype can appear in] a Type1 font dictionary
         # [..] if the embedded font program contains a "CFF" table without CIDFont operators."
@@ -2594,15 +2656,16 @@ class PdfFont:
                                                                 cff = self.cff,
                                                                 ttf = self.ttf,
                                                                 otf = self.otf,
-                                                                makeCID = makeCID)
+                                                                makeCID = makeCID,
+                                                                isSymbolic = isSymbolic)
         
         # ................................................................................ Font Dictionary
 
         gname2width = self.info.get('gname2width')
 
-        if encoding: # Simple fonts
+        if not makeCID: # Simple fonts
 
-            cc2g = PdfFont.parse_encoding(encoding, self.info)
+            cc2g = PdfFont.parse_encoding(Encoding = encoding, isSymbolic = isSymbolic, info = self.info)
             s = sorted(cc2g)
             FirstChar, LastChar = ord(s[0]), ord(s[-1])
 
@@ -2616,18 +2679,21 @@ class PdfFont:
                 FontDescriptor = FontDescriptor,
             )
 
-            cc2g, cc2g_internal = PdfFont.get_cc2g()
+            cc2g, cc2g_internal = self.get_cc2g()
             cc2g = cc2g_internal or cc2g
 
             DW = gname2width.get('.notdef', 0)
-            W = [gname2width.get(cc2g(chr(i))[1:], DW) for i in range(FirstChar, LastChar+1)]
+            W = [gname2width.get(cc2g.get(chr(i), '/.notdef')[1:], DW) for i in range(FirstChar, LastChar+1)]
+
+            # Sanity checks: sometimes widths are (complements of) negative numbers (FontTools fault?)
+            W = [w if w < 32768 else DW for w in W]
 
             if unitsPerEm != 1000:
                 W = [int(w * 1000 /unitsPerEm ) for w in W]
                 DW = int(DW * 1000 / unitsPerEm)
 
             self.font.Widths = PdfArray(W)
-            self.font.FontDescrtor.MissingWidth = DW
+            self.font.FontDescriptor.MissingWidth = DW
 
         else: # CID fonts
 
@@ -2670,7 +2736,11 @@ class PdfFont:
                 cid2width = {cid:int(w * 1000 /unitsPerEm ) for cid,w in cid2width.items()}
                 DW = int(DW * 1000 / unitsPerEm) if DW else None
 
+            # Sanity checks: sometimes widths are (complements of) negative numbers (FontTools fault?)
+            cid2width = {cid:(w if w < 32768 else DW) for cid,w in cid2width.items()}
+
             W = PdfArray([x for cid,w in cid2width.items() for x in [cid,PdfArray([w])]])
+
 
             # CIDFontSubtype; see PDF Ref. Sec. 5.8, Table 5.23: Embedded font organization for various font types
             CIDFontSubtype = PdfName('CIDFontType2') if otfWithGlyf or self.ttf else PdfName('CIDFontType0')
@@ -2708,6 +2778,7 @@ class PdfFont:
                   explicitMap:dict[str,str] = {},
                   symbolicOffset:int = 0,
                   rebase:bool = False,
+                  forceStdRoman:bool = False,
                   mapComposites = True,
                   mapSemicolons:bool = True):
         '''
@@ -2734,13 +2805,19 @@ class PdfFont:
         unrecognized = {}
 
         baseInvMap = {}
-        if rebase:
-            baseEnc = self.font.Encoding.BaseEncoding if isinstance(self.font.Encoding, PdfDict) \
-                        else self.font.Encoding
-            if baseEnc:
-                baseEncMap = PdfFont.parse_encoding(Encoding = baseEnc, info = {})
-                baseInvMap = PdfFontEncodingStandards.invert_cc2glyphname(baseEncMap, baseEnc)
 
+        baseEnc = PdfFontDictFunc.get_base_encoding(self.font)
+
+        if rebase and baseEnc or baseEnc == '/MacRomanEncoding':
+
+            baseEncMap = PdfFont.parse_encoding(Encoding = baseEnc, isSymbolic = False, info = {})
+            baseInvMap = PdfFontEncodingStandards.invert_cc2glyphname(baseEncMap, '/WinAnsiEncoding')
+
+            if forceStdRoman:
+                StdRomanMap = PdfFontEncodingStandards.get_cc2glyphname('/StandardRomanEncoding')
+                StdRomanMapInv = PdfFontEncodingStandards.invert_cc2glyphname(StdRomanMap, '/WinAnsiEncoding')
+                baseInvMap |= StdRomanMapInv
+    
         # If the special BnZr gname is used for chr(0) then we shouldn't map semicolons
         if 'BnZr' in self.cc2g.items():
             mapSemicolons = False
@@ -2749,15 +2826,22 @@ class PdfFont:
 
             # Do not map .notdef
             if gname == '/.notdef': continue
+
+            # gname_internal = self.cc2g_internal.get(cc) if self.cc2g_internal else None
  
-            # This returns either int or str
-            code = self.glyphMap.decode_gname(gname,
-                                        stdGlyphMap = stdGlyphMap,
-                                        isType3 = isType3,
-                                        baseInvMap = baseInvMap,
-                                        explicitMap = explicitMap,
-                                        mapComposites = mapComposites,
-                                        mapSemicolons = mapSemicolons)
+            if code := baseInvMap.get(gname):
+                code = ord(code)
+
+            elif explicitMap.get(gname):
+                code = explicitMap[gname]
+
+            else:
+                # This returns either int or str
+                code = self.glyphMap.decode_gname(gname = gname,
+                                                    stdGlyphMap = stdGlyphMap,
+                                                    isType3 = isType3,
+                                                    mapComposites = mapComposites,
+                                                    mapSemicolons = mapSemicolons)
 
             if code is None:
                 unrecognized[ord(cc)] = gname[1:]
@@ -2864,7 +2948,7 @@ class PdfFont:
         If font program is not extracted (len(self.info) == 0) returns None.
         '''
         if len(self.info) == 0: return None
-        return self.info.get('Type') == 'CFF' and self.info.get('isCID') is True
+        return self.info.get('Type') == 'CFF' and self.info.get('ROS') is not None
 
     # -------------------------------------------------------------------------------- is_embedded()
 
@@ -3121,15 +3205,23 @@ class PdfFont:
             shift = '' if n == 0 else f' +{n:X}00'
             title = f'{self.name}{shift}'
             subtype = self.font.Subtype if self.font.Subtype != '/Type0' else self.font.DescendantFonts[0].Subtype
+
             ToUnicode = ''
-            if self.font.ToUnicode != None:
+            if self.font.ToUnicode:
                 ToUnicode = ', ToUnicode'
             if self.info.get('unicode2gname'):
-                ToUnicode += ', internal Unicode CMap'
+                ToUnicode += ', InternalUnicode'
+
             Embedded = '' if self.is_embedded() else ', Not embedded'
+            Symbolic = ', S-bit' if self.is_symbolic() else ''
             subtype = PdfFontDictFunc.get_subtype_string(self.font)
-            encoding = PdfFontDictFunc.get_encoding_name_string(self.font)
-            subtitle = f'{subtype}, Encoding: {encoding}{ToUnicode}{Embedded}'
+            encoding = PdfFontDictFunc.get_encoding_name_string(self.font) or '/NoEncoding'
+
+            ttfCMaps = ' '.join(k[4:] for k in self.info if re.match('cmap', k))
+            if len(ttfCMaps) > 0: ttfCMaps = ', CMaps: '+ttfCMaps
+
+            subtitle = f'{subtype}, {encoding}{ttfCMaps}{ToUnicode}{Embedded}{Symbolic}'
+
             stream  = f'1 0 0 1 40 320 cm BT\n'
             stream += f'1 0 0 1 -10 40 Tm /C 10 Tf ({title}) Tj\n'
             stream += f'1 0 0 1 -10 30 Tm /C 6 Tf ({subtitle}) Tj\n'
@@ -3306,7 +3398,11 @@ if __name__ == '__main__':
     file = open(options.filePath, 'rb').read()
 
     if ext in ['.pfa', '.pfb']:
-        font = PdfFont(pfb=file)
+        # encoding = PdfDict(
+        #     BaseEncoding = PdfName('WinAnsiEncoding'),
+        #     Differences = PdfArray([0, PdfName('one'), PdfName('two'), PdfName('three')])
+        # )
+        font = PdfFont(pfb=file, encoding=None)
     elif ext == '.cff':
         font = PdfFont(cff=file, force_CID=False)
     elif ext == '.ttf':

@@ -36,17 +36,18 @@ class PdfStreamEditor:
     def __init__(self,
                     xobj:PdfDict,
                     glyphMap:PdfFontGlyphMap = PdfFontGlyphMap(),
-                    textOnly:bool=False,
-                    graphicsOnly:bool=False,
+                    filterText:bool=False,
+                    filterImages:bool=False,
+                    filterVector:bool=False,
                     normalize=False,
                     debug:bool=False,
                     extractFontProgram:bool = False,
                     makeSyntheticCmap:bool = False):
         '''
         Parse self.stream and store the resulting parsed PDF stream tree in self.tree.
-        If textOnly==True, only the text and state operators are parsed, i.e. the bare minimum that allows
-        to extract full text–related information from the stream. Correspondingly, if graphicsOnly==True,
-        only the graphics operators are parsed.
+
+        The filterText, filterImages & filterVector cause the text, image & vector graphics
+        operators to be skipped when parsing self.stream.
 
         If normalize == True, text operators are normalized: all text operators are converted
         to either Tj or TJ, and Tw operators are removed altogether by introducing explicit
@@ -54,8 +55,11 @@ class PdfStreamEditor:
         '''
         self.xobj = xobj
         self.glyphMap = glyphMap
-        self.textOnly = textOnly
-        self.graphicsOnly = graphicsOnly
+
+        self.filterText = filterText
+        self.filterImages = filterImages
+        self.filterVector = filterVector
+
         self.normalize = normalize
         self.debug = debug
 
@@ -73,7 +77,11 @@ class PdfStreamEditor:
         # Parse the stream tree
         stream = self.get_stream()
         if stream == None: stream = ''
-        self.tree = PdfStream.stream_to_tree(stream, textOnly, graphicsOnly)
+        self.tree = PdfStream.stream_to_tree(stream=stream,
+                                             filterText = filterText,
+                                             filterImages = filterImages,
+                                             filterVector = filterVector,
+                                             XObject = xobj)
         if normalize:
             self.tree = self.normalize_text_operators(self.tree)
 
@@ -218,8 +226,9 @@ class PdfStreamEditor:
                 # Creates an editor of the same type as that of any inheriting class
                 editor = type(self)(xobj = x,
                                     glyphMap = self.glyphMap,
-                                    textOnly = self.textOnly,
-                                    graphicsOnly = self.graphicsOnly,
+                                    filterText = self.filterText,
+                                    filterImages = self.filterImages,
+                                    filterVector = self.filterVector,
                                     normalize = self.normalize,
                                     debug = self.debug,
                                     extractFontProgram = self.extractFontProgram,
@@ -740,75 +749,3 @@ class PdfStreamEditor:
             name = PdfName(name.lstrip('/')+'z')
         res.XObject[name] = xobj
         return name
-
-    # --------------------------------------------------------------- fixCMaps()
-
-    # def fixCMaps(self, tree:list, bbox:PdfArray, cMapsTable:dict, xobjCache:list, streamCumulative='', level=0, debug=False):
-    #     '''Fix ToUnicode CMaps by running OCR on the rendered chunks of text defined in the parsed PDF stream tree
-    #     '''
-    #     res = self.resources
-    #     fontname,cmap = None,None
-    #     count = 0
-
-    #     for leaf in tree:
-    #         cmd,args = leaf[0],leaf[1]
-
-    #         # Process font commands
-    #         if cmd == 'Tf': fontname = args[0]
-    #         if cmd == 'q': self.state.append(fontname)
-    #         if cmd == 'Q': fontname = self.state.pop()
-
-    #         if fontname != None:
-    #             if res == None or res.Font == None or fontname not in res.Font: err(f'font not found: {fontname}')
-    #             font = res.Font[fontname]
-    #             cmap = cMapsTable[id(font)] if id(font) in cMapsTable else {}
-    #             width = 2 if font.Subtype == '/Type0' else 1
-            
-    #         cmdStr = ' '.join(f'{arg}' for arg in args)+' '+cmd+'\n' if len(args) != 0 else cmd+'\n'
-
-    #         # Process text command
-    #         if cmd in ['Tj','TJ',"'",'"']:
-    #             count += 1
-    #             streamSnapshot = streamCumulative + cmdStr + 'ET '*level + 'Q '*len(self.state)
-
-    #             eprint(f'{cmd} {args} ---> {cmdStr}')
-
-    #             # create a PDF document
-    #             pdfOut = PdfWriter('test.pdf')
-
-    #             page = PdfDict(
-    #                 Type = PdfName.Page,
-    #                 MediaBox = bbox,
-    #                 Contents = IndirectPdfDict(stream=streamSnapshot),
-    #                 Resources = res
-    #             )
-
-    #             if count == 5:
-    #                 pdfOut.addPage(page)
-    #                 pdfOut.write()
-    #                 sys.exit()
-
-    #             if cmd in ['Tj', "'"]: hexString = PdfUniversalString(args[0])
-    #             elif cmd == '"': hexString = PdfUniversalString(args[2])
-    #             elif cmd == 'TJ':
-    #                 hexString = ''.join([PdfUniversalString(t).hex() for t in args[0] if t[0] in '<('])
-
-    #             # unicode = self.cmap.hexToUnicode(hexString)
-
-    #         # Process XObjects that are being called in the stream
-    #         elif cmd == 'Do':
-    #             xobjName = args[0]
-    #             if res.XObject == None or xobjName not in res.XObject: err(f'XObject not found: {xobjName}')
-    #             xobj = res.XObject[xobjName]
-    #             if id(xobj) not in xobjCache and xobj.Subtype == PdfName.Form and xobj.stream != None:
-    #                 xobjEditor = PdfStreamEditor(xobj.stream, xobj.inheritable.Resources)
-    #                 xobjEditor.tree = xobjEditor.parse_stream(textOnly=True)
-    #                 xobjEditor.fixCMaps(xobjEditor.tree, xobj.bbox, cMapsTable, xobjCache, '', 0, debug)
-    #                 xobjCache.append(id(xobj))
-
-    #         # Just update streamCumulative if cmd is non-text and non-xobj
-    #         else:
-    #             streamCumulative += cmdStr
-
-    #         # Process nested operators by calling self.treeToText() recursively on kids
-    #         if len(leaf) == 3: self.fixCMaps(leaf[2], bbox, cMapsTable, xobjCache, streamCumulative, level+1, debug)

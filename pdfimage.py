@@ -1870,7 +1870,7 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
             image = PdfImage(array = SImage.toBitonal(image.get_array(), threshold = options.threshold))
             modified = True
 
-    if options.zip:
+    if options.zip and image.bpc != 1:
         msg(f'converting to zip')
         image.set_array(image.get_array())
         modified = True

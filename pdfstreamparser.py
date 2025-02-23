@@ -196,7 +196,11 @@ class PdfStream:
     for translation between the pdf stream and pdf stream tree representations.
     '''
 
-    def stream_to_tree(stream:str, textOnly:bool=False, vectorGraphicsAndImagesOnly=False, XObject=None):
+    def stream_to_tree(stream:str,
+                       filterText:bool=False,
+                       filterImages:bool=False,
+                       filterVector:bool=False,
+                       XObject=None):
         '''
         Parse stream and return the resulting parsed PDF stream tree.
         If textOnly==True only the text and state operators are parsed, i.e. the bare minimum that allows to
@@ -205,60 +209,83 @@ class PdfStream:
         assert isinstance(stream, str)
         lexer, parser = PdfStreamLexer(), PdfStreamParser()
         tokens = lexer.tokenize(stream)
-        if textOnly:
-            tokens = PdfStream.pass_only_text(tokens,XObject)
-        if vectorGraphicsAndImagesOnly:
-            tokens = PdfStream.pass_only_vector_graphics_and_images(tokens,XObject)
+
+        if filterText:
+            tokens = PdfStream.filter_text(tokens,XObject)
+
+        if filterImages:
+            tokens = PdfStream.filter_images(tokens,XObject)
+
+        if filterVector:
+            tokens = PdfStream.filter_vector(tokens,XObject)
+
         tree = parser.parse(tokens)
         return tree
 
-    def pass_only_text(tokens, XObject=None):
+    def filter_text(tokens, XObject=None):
         '''
-        Pass the tokens in the entire BT/ET blocks and everything else except images & vector graphics,
+        Pass all tokens except the BT/ET blocks
         '''
         # N.B. sometimes Tf is present outside the BT/ET block!
 
-        path_construction = ['m', 'l', 'c', 'v', 'y', 'h', 're']
-        path_painting = ['S', 's', 'f', 'F', 'f*', 'B', 'B*', 'b', 'b*', 'n']
-        clipping_paths = ['W','W*']
-        vector_graphics = path_construction + path_painting + clipping_paths
-
-        isText,isInlineImage = False,False
-        args = []
+        isText = False
 
         for tok in tokens:
-            if tok.type == 'BT': isText = True; yield tok
-            elif tok.type == 'ET': isText = False; yield tok
-            elif tok.type == 'BI': isInlineImage = True
-            elif tok.type == 'INLINE_IMAGE_STREAM': isInlineImage = False
-            elif isText: yield tok
-            elif isInlineImage: pass
-            elif tok.type == 'OPERATOR':
-                if tok.value not in vector_graphics and tok.value != 'Do' or tok.value == 'Do' and \
-                        not (XObject != None and args[0].value in XObject and XObject[args[0].value].Subtype == '/Image'):
+            if tok.type == 'BT': isText = True
+            elif tok.type == 'ET': isText = False
+            elif not isText:
+                yield tok
+
+    def filter_images(tokens, XObject=None):
+        '''
+        Pass all tokens except the images Do operators
+        '''
+        args = [] # operator arguments and everything else that precedes it
+
+        for tok in tokens:
+            if tok.type == 'OPERATOR':
+                if tok.value == 'Do' and XObject is not None and args[-1].value in XObject \
+                        and XObject[args[-1].value].Subtype == '/Image':
+                    for arg in args[:-1]: yield arg
+                else:
                     for arg in args: yield arg
                     yield tok
                 args = []
             else:
                 args.append(tok)
 
-    def pass_only_vector_graphics_and_images(tokens,XObject=None):
-        '''
-        Pass all tokens except the BT/ET blocks
-        '''
-        isText = False
-        args = []
+        # Flush
+        for arg in args: yield arg
+        
 
+    def filter_vector(tokens, XObject=None):
+        '''
+        Pass all tokens except the vector graphics operators
+        '''
+        path_construction = ['m', 'l', 'c', 'v', 'y', 'h', 're']
+        path_painting = ['S', 's', 'f', 'F', 'f*', 'B', 'B*', 'b', 'b*', 'n']
+        clipping_paths = ['W','W*']
+        vector_graphics = path_construction + path_painting + clipping_paths
+
+        isText = isInlineImage = False
+        args = []
         for tok in tokens:
-            if tok.type == 'BT': isText = True
-            elif tok.type == 'ET': isText = False
-            elif not isText:
-                if tok.type == 'OPERATOR':
+            if tok.type == 'BT': isText = True; yield tok
+            elif tok.type == 'ET': isText = False; yield tok
+            elif tok.type == 'BI': isInlineImage = True; yield tok
+            elif tok.type == 'INLINE_IMAGE_STREAM': isInlineImage = False; yield tok
+            elif isText or isInlineImage: yield tok
+            elif tok.type == 'OPERATOR':
+                if tok.value not in vector_graphics:
                     for arg in args: yield arg
                     yield tok
-                    args = []
-                else:
-                    args.append(tok)
+                args = []
+            else:
+                args.append(tok)
+
+        # Flush
+        for arg in args: yield arg
+
 
     def tree_to_stream(tree:list):
         '''

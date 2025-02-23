@@ -314,6 +314,112 @@ hermitconj;1D34
 nPerp;2AEB0338
 # ============================================== LiteraturnayaT1
 hyphenchar;002D
+# ============================================== OmegaSerifGreek
+Upsilonhook;03D2
+betacurled;03D0
+rhoscript;03F1
+omegapi;03D6
+iotainvertedcircumflex;21290330
+qoppavariant;03D9
+guillemotleftgreek;00AB
+guillemotrightgreek;00BB
+alphaupogegrammeni;1FB3
+etaupogegrammeni;1FC3
+omegaupogegrammeni;1FF3
+Sigmalunate;03F9
+Stigma;03DA
+stigma;03DB
+Qoppa;03D8
+qoppa;03DF
+Sampi;03E0
+sampi;03E1
+Iotadiaeresis;03AA
+Upsilondiaeresis;03AB
+digamma;03DD
+digammavariant;03DD
+
+dasianarrow;1FFE
+psilinarrow;1FBF
+varianarrow;1FEF
+oxianarrow;1FFD
+perispomeninarrow;1FC0
+perispomenivariantnarrow;1FC0
+dasiavarianarrow;1FDD
+dasiaoxianarrow;1FDE
+dasiaperispomeninarrow;1FDF
+dasiaperispomenivariantnarrow;1FDF
+psilivarianarrow;1FCD
+psilioxianarrow;1FCE
+psiliperispomeninarrow;1FCF
+psiliperispomenivariantnarrow;1FCF
+makronnarrow;00AF
+vrachynarrow;02D8
+
+dasia;1FFE
+psili;1FBF
+varia;1FEF
+oxia;1FFD
+perispomeni;1FC0
+perispomenivariant;1FC0
+dasiavaria;1FDD
+dasiaoxia;1FDE
+dasiaperispomeni;1FDF
+dasiaperispomenivariant;1FDF
+psilivaria;1FCD
+psilioxia;1FCE
+psiliperispomeni;1FCF
+psiliperispomenivariant;1FCF
+makron;00AF
+vrachy;02D8
+
+dasialarge;1FFE
+psililarge;1FBF
+varialarge;1FEF
+oxialarge;1FFD
+perispomenilarge;1FC0
+perispomenivariantlarge;1FC0
+dasiavarialarge;1FDD
+dasiaoxialarge;1FDE
+dasiaperispomenilarge;1FDF
+dasiaperispomenivariantlarge;1FDF
+psilivarialarge;1FCD
+psilioxialarge;1FCE
+psiliperispomenilarge;1FCF
+psiliperispomenivariantlarge;1FCF
+makronlarge;00AF
+vrachylarge;02D8
+
+iotadiaeresis;03CA
+iotadiaeresisvaria;1FD2
+iotadiaeresisoxia;1FD3
+iotadiaeresisperispomeni;1FD7
+iotadiaeresisperispomenivar;1FD7
+iotadiaeresistonos;0390
+upsilondiaeresis;03CB
+upsilondiaeresisvaria;1FE2
+upsilondiaeresisoxia;1FE3
+upsilondiaeresisperispomeni;1FE7
+upsilondiaeresisperispomenivar;1FE7
+upsilondiaeresistonos;03B0
+
+Alphaupogegrammeni;1FBC
+Etaupogegrammeni;1FCC
+Omegaupogegrammeni;1FFC
+dexiakeraia;0374
+aristerikeraia;0375
+diaeresistonos;0385
+upogegrammeni;037A
+prosgegrammeni;1FBE
+dieresisvaria;1FED
+dieresisoxia;1FEE
+dieresisperispomeni;1FC1
+dieresisperispomenivariant;1FC1
+
+varstigma;03C2
+vardigamma;03DD
+varStigma;03DA
+Koppa;03DE
+varKoppa;03DE
 # =======================================================================================================
 # MS WORD FONTS
 # ============================================== Times New Roman
@@ -427,6 +533,8 @@ exdoubleintegralloop;2B2D
 extrippleintegralloop;2B2D
 # upsquarebracketleft;
 # upsquarebracketright;
+# ============================================== Wingdings3
+a2opleftrt;2B80
 # ============================================== LucidaSansUnicode
 Io;0401
 Acyril;0410
@@ -547,6 +655,7 @@ palochka;04c0
 afii10073cedilla;0499
 polishlcross;0141
 hardspace;0020
+# Compound Word Mark: https://mailman.ntg.nl/archives/list/ntg-pdftex@ntg.nl/thread/WSEI7BWVWD7W7MFKG54J4I6PG72HLER3/?sort=date
 cwm;200c
 notarrowright;219b
 # ============================================== Mathematica2Mono
