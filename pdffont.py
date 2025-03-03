@@ -2300,9 +2300,6 @@ class PdfFont:
             averageWidth = sum(w)/ len(w) if len(w) > 0 else 1
             self.spaceWidth = averageWidth
 
-        # if re.search('Times', self.name):
-        #     pprint(self.cmap_internal.cc2unicode)
-
     # -------------------------------------------------------------------------------- extract_font_program()
 
     def extract_font_program(self):
@@ -2356,14 +2353,13 @@ class PdfFont:
     # -------------------------------------------------------------------------------- parse_encoding()
 
     @staticmethod
-    def parse_encoding(Encoding:ENC_TYPE, isSymbolic:bool, info:dict):
+    def parse_encoding(Encoding:ENC_TYPE, isSymbolic:bool):
         '''
         Parses `Encoding`, which is either a `PdfName` or a `PdfDict`, and returns a map from
         char codes (str) to glyphnames (PdfName)
         '''
-        gid2gname = info.get('gid2gname') or {}
 
-        def parse_named_encoding(Encoding:PdfName, isSymbolic:bool, gid2gname:dict[int,str]) -> dict[str,PdfName]:
+        def parse_named_encoding(Encoding:PdfName, isSymbolic:bool) -> dict[str,PdfName]:
             '''
             PDF Ref. v1.7 sec. 5.5.5: Table 5.11:
             For a font program that is embedded in the PDF file, the implicit base
@@ -2372,13 +2368,10 @@ class PdfFont:
 
             This is, actully, incorrect: in reality, the implicit encoding is determined
             purely based on whether the font is symbolic or not.
-
-            We assume that the built-in encoding of embedded fonts and the StandardEncoding/built-in
-            encoding of non-embedded (Core14) fonts is already in gid2gname.
             '''
             cc2g = PdfFontEncodingStandards.get_cc2glyphname(Encoding) if Encoding \
                 else PdfFontEncodingStandards.get_cc2glyphname('/StandardEncoding') if not isSymbolic \
-                else {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
+                else {}
             if cc2g is None:
                 raise ValueError(f'invalid Encoding: {Encoding}')
             return cc2g
@@ -2392,14 +2385,14 @@ class PdfFont:
             # If this entry is absent, the Differences entry describes differences from an implicit
             # base encoding.
 
-            cc2g = parse_named_encoding(Encoding.BaseEncoding, isSymbolic, gid2gname)
+            cc2g = parse_named_encoding(Encoding.BaseEncoding, isSymbolic)
 
             if Encoding.Differences != None:
                 cc2g |= PdfFontDictFunc.differences_to_cc2glyphname(Encoding.Differences)
 
         else:
 
-            cc2g = parse_named_encoding(Encoding, isSymbolic, gid2gname)
+            cc2g = parse_named_encoding(Encoding, isSymbolic)
             
         return cc2g
 
@@ -2426,7 +2419,9 @@ class PdfFont:
 
         # .............................................................. Classify font's Encoding
 
-        if self.is_cid():
+        if self.is_cid(): # CID fonts
+
+            # For CID fonts, we only use cc2g, so cc2g_internal is always None
 
             # Get gid2gname
             if gid2gname := info.get('gid2gname'):
@@ -2477,8 +2472,11 @@ class PdfFont:
 
         else: # Simple fonts
 
-            cc2g = PdfFont.parse_encoding(Encoding = font.Encoding, isSymbolic = isSymbolic, info = info)
-            gname2width = info.get('gname2width')
+            # Make cc2g
+
+            cc2g = PdfFont.parse_encoding(Encoding = font.Encoding, isSymbolic = isSymbolic)
+
+            # Make cc2g_internal
 
             if font.Subtype == '/TrueType':
 
@@ -2486,7 +2484,7 @@ class PdfFont:
 
                 if font.Encoding is None or PdfFontDictFunc.is_symbolic(font) is True:
 
-                    # Symbolic TrueType fonts: thos with the Symbolic flag or ones that lack Encoding.
+                    # Symbolic TrueType fonts: those with the Symbolic flag or ones that lack Encoding.
                     # PDF Ref: When the Symbolic flag is set in a TrueType font the font.Encoding is ignored
 
                     if cmap30 := info.get('cmap30'):
@@ -2502,38 +2500,38 @@ class PdfFont:
                 else:
 
                     # Non-symbolic TrueType fonts
+                    
+                    mapFunc = None
+                    if cmap31 := info.get('cmap31'):
+                        mapFunc = lambda g: cmap31.get(AdobeGlyphMap.get(g), g[1:])
+                    elif cmap10 := info.get('cmap10'):
+                        stdRoman = PdfFontEncodingStandards.get_cc2glyphname('/StandardRomanEncoding')
+                        stdRomanInv = {gname:cc for cc,gname in stdRoman.items()}
+                        mapFunc = lambda g: cmap10.get(stdRomanInv.get(g), g[1:])
 
-                    cmap10 = None
-                    cmap31 = info.get('cmap31')
-                    if cmap31 is None:
-                        cmap10 = info.get('cmap10')
-                        if cmap10 is not None:
-                            stdRoman = PdfFontEncodingStandards.get_cc2glyphname('/StandardRomanEncoding')
-                            stdRomanInv = {gname:cc for cc,gname in stdRoman.items()}
+                    if mapFunc:
+                        cc2g_internal = {cc:PdfName(mapFunc(g)) for cc,g in cc2g.items()}
 
-                    # print('DEBUG:')
-                    # pprint(self.info)
+            # Non-TrueType
 
-                    mapGname = lambda g: (cmap31.get(AdobeGlyphMap.get(g)) or g[1:]) if cmap31 \
-                                        else (cmap10.get(stdRomanInv.get(g)) or g[1:]) if cmap10 \
-                                        else g[1:]
+            elif gid2gname := self.info.get('gid2gname'):
+                
+                cc2g_internal = {chr(gid):PdfName(gname) for gid,gname in gid2gname.items() }
 
-                    cc2g_internal = {cc:PdfName(mapGname(g)) for cc,g in cc2g.items()}
+                cc2g_internal |= cc2g
 
-                    # Distill cc2g_internal
-                    if gname2width:
-                        cc2g_internal = {cc:g for cc,g in cc2g_internal.items() if g[1:] in gname2width}
+            # Distill cc2g_internal
+            if cc2g_internal:
+                gname2width = info.get('gname2width')
+                if gname2width is None:
+                    print(self.font)
+                    raise ValueError(f'no gname2width')
+                cc2g_internal = {cc:g for cc,g in cc2g_internal.items() if g[1:] in gname2width}
 
-                # Distill cc2g
-                if cc2g_internal:
-                    cc2g = {cc:g for cc,g in cc2g.items() if cc in cc2g_internal}
- 
-            else:
- 
-                # Distill cc2g
-                if gname2width:
-                    cc2g = {cc:g for cc,g in cc2g.items() if g[1:] in gname2width}
-
+            # If cc2g_internal exists, sync it with cc2g
+            if cc2g_internal:
+                cc2g = cc2g_internal | cc2g
+                cc2g = {cc:g for cc,g in cc2g.items() if cc in cc2g_internal}
 
         return cc2g, cc2g_internal
 
@@ -2594,9 +2592,6 @@ class PdfFont:
         for cc in self.cc2g:
             if cc not in cc2width:
                 cc2width[cc] = self.widthMissing
-
-        # Remove cc2width entries that are not in self.encoding
-        cc2width = {cc:w for cc,w in cc2width.items() if cc in self.cc2g}
 
         return cc2width
 
@@ -2665,7 +2660,7 @@ class PdfFont:
 
         if not makeCID: # Simple fonts
 
-            cc2g = PdfFont.parse_encoding(Encoding = encoding, isSymbolic = isSymbolic, info = self.info)
+            cc2g = PdfFont.parse_encoding(Encoding = encoding, isSymbolic = isSymbolic)
             s = sorted(cc2g)
             FirstChar, LastChar = ord(s[0]), ord(s[-1])
 
@@ -2808,9 +2803,11 @@ class PdfFont:
 
         baseEnc = PdfFontDictFunc.get_base_encoding(self.font)
 
-        if rebase and baseEnc or baseEnc == '/MacRomanEncoding':
+        if rebase and baseEnc:
 
-            baseEncMap = PdfFont.parse_encoding(Encoding = baseEnc, isSymbolic = False, info = {})
+            baseEncMap = PdfFont.parse_encoding(Encoding = baseEnc, isSymbolic = False)
+
+            # Use encodingName = '/WinAnsiEncoding' to resolve enc inversion problems for all fonts, not just for WinAnsi
             baseInvMap = PdfFontEncodingStandards.invert_cc2glyphname(baseEncMap, '/WinAnsiEncoding')
 
             if forceStdRoman:
@@ -2849,13 +2846,18 @@ class PdfFont:
 
             u = None
             if isinstance(code, int):
-                try: u = internal_cc2unicode.get(chr(code))
-                except: u = chr(symbolicOffset + code)
+                if internal_cc2unicode is not None:
+                    u = internal_cc2unicode.get(chr(code))
+                else:
+                    u = chr(symbolicOffset + code)
             else:
                 u = code
 
             if u != None:
                 cmap.cc2unicode[cc] = u
+            elif internal_cc2unicode is not None:
+                if u := internal_cc2unicode.get(cc):
+                    cmap.cc2unicode[cc] = u
 
         cmap.reset_unicode2cc()
 
@@ -2876,9 +2878,8 @@ class PdfFont:
             basePath = self.name[1:]
         ext = 'pfb' if self.pfb else 'ttf' if self.ttf else 'otf' if self.otf else 'cff' if self.cff else None
 
-        # if ext == 'cff':
-        #     PdfFontFile.cff_to_xml(self.cff, basePath + '.xml')
-        #     return
+        if ext == 'cff':
+            PdfFontFile.cff_to_xml(self.cff, basePath + '.xml')
 
         open(basePath + '.' + ext, 'wb').write(fontProgram)
         return
@@ -3017,8 +3018,8 @@ class PdfFont:
     def width(self, s:str, isEncoded = False):
         '''
         Returns the width of string if typeset with self.font. The value isEncoded == False means
-        the string s is a unicode string; the value of True means it is an (internal part of) PDF
-        encoded string.
+        the string s is a unicode string; the value of True means it is a PDF
+        encoded string (just the inner part without the brackets).
 
         NB: the widths are in document units, not the font units.
         For example, widths of single chars are normally < 1 for Type 1 fonts.
@@ -3058,10 +3059,9 @@ class PdfFont:
 
         streams = {}
 
-        cc2g = self.cc2g or {}
         cc2g = {cc:gname[1:] for cc,gname in (self.cc2g or {}).items()}
         cc2g_internal = {cc:gname[1:] for cc,gname in self.cc2g_internal.items()} if self.cc2g_internal else None
-        cc2w = {cc:w for cc,w in self.cc2width.items()}
+        cc2w = self.cc2width
 
         red, green, blue, gray = '1 0.25 0.25 rg', '0 0.75 0 rg', '0.25 0.25 1 rg', '0.5 g'
 
@@ -3138,9 +3138,7 @@ class PdfFont:
 
         # Print glyph name
         counter = {}
-        for cc in cc2w:
-
-            gname = cc2g.get(cc, 'None')
+        for cc,gname in cc2g.items():
             
             if cc2g_internal:
                 gname_internal = cc2g_internal.get(cc, 'None')
@@ -3163,7 +3161,7 @@ class PdfFont:
 
         # Print glyph
         counter = {}
-        for cc in cc2w:
+        for cc in cc2w if self.is_cid() else [chr(i) for i in range(256)]:
 
             # if cc2g.get(cc,'.notdef') == '.notdef': continue
 

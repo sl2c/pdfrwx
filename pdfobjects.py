@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from pdfrw import PdfObject, PdfName, PdfDict, PdfArray
+from pdfrw import PdfName, PdfDict, PdfArray
 
 # ============================================================================= PdfObjects [generator]
 
@@ -78,86 +78,3 @@ def PdfObjects(object, name:str = '', cache:set = None, debug = False):
             yield from PdfObjects(item, name=itemName, cache=cache, debug=debug)
 
     yield (name, object)
-
-
-# # ============================================================================= PdfObjects
-
-# class PdfObjects(dict):
-#     '''A utility class to effectively create collections of objects such as images, fonts etc.
-#     It is a dict that maps id(obj) --> obj.
-#     You can add objects to the collection by calling:
-    
-#     * ```read(obj, filter)```, add objects from obj's resources, as well as
-#     objects from the objects' resources from the obj's resources, recursively;
-#     * ```read_all(pdf, filter)```, which will read all fonts from the PDF
-
-#     The type of objects you gather is defined by the filter.
-#     Several pre-defined filter are provided by the class.
-
-#     An xobject can be also added to the collection directly using self.add(xobject).
-#     '''
-#     objFilter           = lambda name,xobj: xobj.Type == PdfName.XObject \
-#                                     or xobj.Subtype in [PdfName.Image, PdfName.Form] # Since xobj.Type can be None
-    
-#     imageFilter         = lambda name,xobj: xobj.Subtype == PdfName.Image and name not in [PdfName.Mask, PdfName.SMask]
-
-#     formFilter          = lambda name,xobj: xobj.Subtype == PdfName.Form
-
-#     fontFilter          = lambda name,xobj: xobj.Subtype in \
-#                             [PdfName.Type1, PdfName.MMType1, PdfName.TrueType, PdfName.Type3, PdfName.Type0]
-#     fontType1Filter     = lambda name,xobj: xobj.Subtype == PdfName.Type1
-#     fontType3Filter     = lambda name,xobj: xobj.Subtype == PdfName.Type3
-
-#     contentsFilter      = lambda name,xobj: name == PdfName.Contents and xobj.Subtype == None
-
-#     annotsFilter        = lambda name,xobj: name == PdfName.Annots
-#     pieceInfoFilter     = lambda name,xobj: name == PdfName.PieceInfo
-#     colorSpaceFilter     = lambda name,xobj: name == PdfName.ColorSpace
-
-#     def __init__(self):
-#         pass
-
-#     def read(self, dic:PdfDict, filter = 'PdfObjects.objFilter', cache:set = None):
-#         '''
-#         Add objects from obj's resources, as well as objects from the objects' resources
-#         from the obj's resources, recursively.
-#         '''
-#         # if cache == None: cache = {}
-#         # else:
-#         #     if id(dic) in cache: return
-#         # cache[id(dic)] = dic
-
-#         if cache == None: cache = set()
-#         # print('+'*50)
-
-#         if id(dic) in cache: return
-#         cache.add(id(dic))
-
-#         INHERITABLE = [PdfName.Resources, PdfName.Rotate, PdfName.MediaBox, PdfName.CropBox]
-
-#         # Inherit page items
-#         items = {k:v for k,v in dic.items()}
-#         if dic.Type == PdfName.Page:
-#             for name in INHERITABLE:
-#                 if name not in items:
-#                     inherited = dic.inheritable[name]
-#                     if inherited != None:
-#                         items[name] = inherited
-
-#         for name, obj in items.items():
-#             # print(name)
-#             if isinstance(obj, PdfDict):
-#                 if obj.Type == PdfName.Page: continue # Do not traverse the page tree
-#                 if filter(name, obj): self[id(obj)] = obj  #; print(f'ADDED {name}')
-#                 else: self.read(obj, filter, cache)
-#             if isinstance(obj, PdfArray):
-#                 for a in obj:
-#                     if isinstance(a, PdfDict):
-#                         if a.Type == PdfName.Page: continue
-#                         if filter(name, a): self[id(a)] = a #; print(f'ADDED: {name}')
-#                         else: self.read(a, filter, cache)
-#                     # There are no arrays inside arrays, so just continue
-                        
-#         # print('-'*50)
-
-    

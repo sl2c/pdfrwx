@@ -75,7 +75,13 @@ class DjVuSedEditor:
 
         return stream
 
-    def insert_ocr(self, pdf:PdfReader, defaultUnicodeFont:str, defaultFontDir:str, firstPage = 1, debug = False):
+    def insert_ocr(self,
+                   pdf:PdfReader,
+                   defaultUnicodeFont:str,
+                   defaultFontDir:str,
+                   firstPage = 1,
+                   removeOCR:bool = False,
+                   debug = False):
 
         # One font, many pages
         utils = PdfFontUtils()
@@ -115,11 +121,12 @@ class DjVuSedEditor:
                     pdfPage.Contents = IndirectPdfDict(stream = '')
 
                 # Remove old OCR
-                resources = pdfPage.inheritable.Resources
-                if resources == None: resources = PdfDict(); pdfPage.Resources = resources
-                glyphMap = PdfFontGlyphMap(loadAdobeGlyphList = True)
-                pdfEditor = PdfStreamEditor(pdfPage, glyphMap = glyphMap, makeSyntheticCmap = True)
-                pdfEditor.processText(xobjCache=xobjCache, options={'removeOCR':True})
+                if removeOCR:
+                    resources = pdfPage.inheritable.Resources
+                    if resources == None: resources = PdfDict(); pdfPage.Resources = resources
+                    glyphMap = PdfFontGlyphMap(loadAdobeGlyphList = True)
+                    pdfEditor = PdfStreamEditor(pdfPage, glyphMap = glyphMap, makeSyntheticCmap = True)
+                    pdfEditor.processText(xobjCache=xobjCache, options={'removeOCR':True})
 
                 if len(cmd) != 2 or cmd[1][0].name != 'page':
                     err('argument of set-txt should be a single page chunk')
