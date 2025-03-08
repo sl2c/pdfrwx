@@ -1,21 +1,14 @@
 #!/usr/bin/env python3
 
-# Write this man about the bug in PIL Image.paste()!
-# https://sudonull.com/post/129265-Alpha_composite-optimization-history-in-Pillow-20
-# https://habr.com/ru/post/98743/
-# https://github.com/homm/
-# https://twitter.com/wouldntfix
-
-from multiprocessing.sharedctypes import Value
-import struct, zlib, base64, sys, os, re, tempfile, subprocess
+import struct, zlib, base64, re
 from io import BytesIO
 import numpy as np
 
-from PIL import Image, TiffImagePlugin, ImageChops, ImageCms
+from PIL import Image
 Image.MAX_IMAGE_PIXELS = None
 
-from pdfrw import PdfObject, PdfName, PdfArray, PdfDict, IndirectPdfDict, py23_diffs
-from .common import err, msg, warn, eprint, get_key, encapsulate, decapsulate
+from pdfrw import PdfName, PdfDict, IndirectPdfDict, py23_diffs
+from .common import warn, get_key, encapsulate, decapsulate
 
 # ========================================================================== PdfFilter
 
@@ -24,17 +17,34 @@ class PdfFilter:
     # -------------------------------------------------------------------- uncompress()
 
     @staticmethod
-    def uncompress(obj:IndirectPdfDict):
+    def uncompress(obj:IndirectPdfDict,
+                   fixPngPredictors:bool = False,
+                   fixFlateStreams:bool = False):
         '''
-        Returns an uncompressed version of obj. Supports objects compressed with one or more of the following filters:
+        Returns an uncompressed version of `obj`. Supports objects compressed with one or more of the following filters:
 
-        * /ASCIIHexDecode and /ASCII85Decode
-        * /FlateDecode and /LZWDecode (all values of /Predictor are supported)
-        * /RunLengthDecode
+        * `/ASCIIHexDecode` and `/ASCII85Decode`
+        * `/FlateDecode` and `/LZWDecode` (all values of /Predictor are supported)
+        * `/RunLengthDecode`
 
-        Also, checks to see if PNG predictor values (obj.DecodeParms[i].Predictor == 10..15)
-        coincide with the predictor bytes in the data stream, and if not fixes obj.DecodeParms[i].Predictor
-        values (i.e. modifies the obj!).
+        Normally, the function does not modify the `obj` itself. However
+
+        * If `fixPngPredictors` is `True`, for all filters that use PNG predictors (PDF Ref. p. 76),
+        the function will set the value of the `/Predictor` parameter to 15:
+        the actual value of the predictor parameter doesn't matter, according the PDF Ref.,
+        as long as it is in the PNG predictors range (10..15).
+        Setting it to 15 prevents errors in some PDF viewers that erroneously
+        base assumptions about the actual predictor values used in the stream on the value of
+        the `/Predictor` entry.
+
+        * The function is able to uncompress `/FlateDecode` streams that use RFC1950 (deflate)
+        algorithm, which is different from the more well-known RFC1951 (zlib) algorithm.
+        For such RFC1950 streams it successfully returns the result.
+        If `fixFlateStreams` is `True` it will also fix the `obj.stream` itself by
+        turning it into an RFC1951 (zlib) stream
+        (together with updating other `obj` entries: `/Filters`, `/DecodeParms`, `/Length`).
+
+        These two function arguments can therefore be used to fix existing issues with the PDF dictionaries.
         '''
         assert isinstance(obj, PdfDict)
         stream = obj.stream
@@ -43,6 +53,8 @@ class PdfFilter:
 
         filters = encapsulate(obj.Filter)
         parms = encapsulate(obj.DecodeParms)
+
+        streamNeedsFixing = False
 
         f = 0
         while f < len(filters):
@@ -79,10 +91,12 @@ class PdfFilter:
                 if filter in ['/FlateDecode','/Fl']:
                     try: stream = zlib.decompress(stream)
                     except:
-                        warn(f'zlib.decompress() failed; falling back to zlib-flate (run from shell)')
-                        exe = '.exe' if sys.platform == 'win32' else ''
-                        result = subprocess.run(['zlib-flate' + exe, '-uncompress'], input=stream, capture_output=True)
-                        stream = result.stdout
+                        try:
+                            warn(f'zlib.decompress() failed; recovering')
+                            stream = zlib.decompress(stream[2:], wbits = -15)
+                            streamNeedsFixing = True
+                        except:
+                            raise ValueError(f'failed to inflate stream')
                 else:
                     earlyChange = int(get_key(parm, '/EarlyChange', '1'))
                     stream = b''.join(x for x in PdfFilter.lzw_decode(stream, earlyChange))
@@ -150,7 +164,7 @@ class PdfFilter:
 
                     # Fix PNG Predictor value: set it to 15 (fixes Multivalent bug)
                     # its actual value doesn't matter: PDF Ref. Sec. 3.3.3
-                    if predictor != 15:
+                    if fixPngPredictors and predictor != 15:
                         parms[f].Predictor = 15
                         obj.DecodeParms = decapsulate(parms)
                         warn(f'fixed PNG predictor: {predictor} --> 15')
@@ -182,6 +196,13 @@ class PdfFilter:
         result.DecodeParms = decapsulate(parms[f:])
         result.stream = py23_diffs.convert_load(stream)
         result.Length = len(result.stream)
+
+        if fixFlateStreams and streamNeedsFixing:
+            warn(f'fixed Flate stream')
+            obj.Filter = PdfName.FlateDecode
+            obj.DecodeParms = None
+            obj.stream = py23_diffs.convert_load(zlib.compress(stream))
+            obj.Length = len(obj.stream)
 
         return result
 

@@ -19,7 +19,7 @@ try:
     from fontTools.ttLib import TTFont, newTable
     from fontTools.ttLib.tables._c_m_a_p import CmapSubtable
     from fontTools.t1Lib import T1Font, writePFB
-    from fontTools.cffLib import CFFFontSet
+    from fontTools.cffLib import CFFFontSet, EncodingConverter, readCard8, readCard16
     from fontTools.pens.basePen import NullPen
     from fontTools.pens.boundsPen import BoundsPen
     from fontTools.misc.xmlWriter import XMLWriter
@@ -35,6 +35,62 @@ from typing import Union
 # ================================================== Typedef
     
 ENC_TYPE = Union[PdfName, PdfDict]
+
+# ================================================== class MyEncodingConverter
+
+class MyEncodingConverter(EncodingConverter):
+    '''
+    '''
+    def _read(self, parent, value):
+        if value == 0:
+            return "StandardEncoding"
+        elif value == 1:
+            return "ExpertEncoding"
+        else:
+            assert value > 1
+            file = parent.file
+            file.seek(value)
+            fmt = readCard8(file)
+            haveSupplement = fmt & 0x80
+            fmt = fmt & 0x7F
+            if fmt == 0:
+                encoding = MyEncodingConverter.parseEncoding0(parent.charset, file)
+            elif fmt == 1:
+                encoding = MyEncodingConverter.parseEncoding1(parent.charset, file)
+            if haveSupplement:
+                MyEncodingConverter.parseSupplement(encoding, file, parent.strings)
+            return encoding
+
+    @staticmethod
+    def parseEncoding0(charset, file):
+        nCodes = readCard8(file)
+        encoding = [".notdef"] * 256
+        for glyphID in range(1, nCodes + 1):
+            code = readCard8(file)
+            encoding[code] = charset[glyphID]
+        return encoding
+
+    @staticmethod
+    def parseEncoding1(charset, file):
+        nRanges = readCard8(file)
+        encoding = [".notdef"] * 256
+        glyphID = 1
+        for _ in range(nRanges):
+            code = readCard8(file)
+            nLeft = readCard8(file)
+            for glyphID in range(glyphID, glyphID + nLeft + 1):
+                encoding[code] = charset[glyphID]
+                code = code + 1
+            glyphID = glyphID + 1
+        return encoding
+
+    @staticmethod
+    def parseSupplement(encoding, file, strings):
+        nSups = readCard8(file)
+        for _ in range(nSups):
+            code = readCard8(file)
+            SID = readCard16(file)
+            encoding[code] = strings[SID]
 
 # ================================================== class PdfTextString
 
@@ -1804,18 +1860,40 @@ class PdfFontFile:
     def read_pfb_info(font:bytes):
         '''
         '''
+        def salvage_gid2gname(data:bytes):
+            s = data.decode('latin1')
+            gid2gname = {}
+            insideEncoding = False
+            insideDup = False
+            isDup = lambda tokens: len(tokens) == 4 and tokens[0] == 'dup' and tokens[3] == 'put'
+            for line in s.splitlines():
+                tokens = line.split()
+                if len(tokens) == 0:
+                    continue
+                elif tokens[0] == '/Encoding':
+                    insideEncoding = True
+                elif insideEncoding and isDup(tokens):
+                    gid2gname[int(tokens[1])] = tokens[2][1:]
+                    insideDup = True
+                elif insideDup and not isDup(tokens):
+                    return gid2gname
+            return gid2gname
+
         with tempfile.TemporaryDirectory() as tmp:
             T = lambda fileName: os.path.join(tmp, fileName)
             open(T('tmp.pfb'),'wb').write(font)
             t1 = T1Font(T('tmp.pfb'))
 
+        info = {'Type':'PFB'}
+
         try:
             t1.parse()
         except:
-            warn(f'failed to parse a Type1 font')
-            return {}
+            warn(f'failed to parse Type1 font; salvaging Encoding')
+            info['gid2gname'] = salvage_gid2gname(t1.data)
+            info['gname2width'] = {gname:0 for gname in t1.getGlyphSet()} # Can't do glyph.draw(), so no glyph.width
+            return info
 
-        info = {'Type':'PFB'}
 
         info['FontName'] = t1.font['FontName']
         if 'FontInfo' in t1.font:
@@ -2057,6 +2135,7 @@ class PdfFontFile:
 
         # Parse the CFF data
         cffFont = CFFFontSet()
+
         cffFont.decompile(file = BytesIO(cff), otFont = TTFont())
 
         # Access the first font in the CFF font set
@@ -2065,6 +2144,8 @@ class PdfFontFile:
         info['FontName'] = FontName
 
         font = cffFont[0]
+
+        font.converters['Encoding'] = MyEncodingConverter()
 
         # Presence of ROS means a CID-encoded CFF font
         info['ROS'] = font.ROS if hasattr(font, 'ROS') else None
@@ -2091,8 +2172,11 @@ class PdfFontFile:
                 info['gid2gname'] = {(int(gname[3:]) if gname != '.notdef' else 0):gname for gname in chars.keys()}
 
             else: # Simple CFF
-                try: enc = font.Encoding
-                except Exception as e: warn(e); enc = None
+                try:
+                    enc = font.Encoding
+                except Exception as e:
+                    warn(e)
+                    enc = None
 
                 if isinstance(enc, list):
 
@@ -2476,11 +2560,17 @@ class PdfFont:
 
             cc2g = PdfFont.parse_encoding(Encoding = font.Encoding, isSymbolic = isSymbolic)
 
-            # Make cc2g_internal
+            
+            if font.Subtype == '/Type3':
 
-            if font.Subtype == '/TrueType':
+                # Distill w/r CharProcs
+                cc2g = {cc:g for cc,g in cc2g.items() if g in font.CharProcs}
+
+            elif font.Subtype == '/TrueType':
 
                 # PDF Ref. v1.7, sec. 5.5.5: Encoding of TrueType fonts (p.429)
+
+                # Make cc2g_internal
 
                 if font.Encoding is None or PdfFontDictFunc.is_symbolic(font) is True:
 
@@ -2528,7 +2618,7 @@ class PdfFont:
                     raise ValueError(f'no gname2width')
                 cc2g_internal = {cc:g for cc,g in cc2g_internal.items() if g[1:] in gname2width}
 
-            # If cc2g_internal exists, sync it with cc2g
+            # If cc2g_internal exists, sync it with cc2g; discrepancies treated in favour of cc2g
             if cc2g_internal:
                 cc2g = cc2g_internal | cc2g
                 cc2g = {cc:g for cc,g in cc2g.items() if cc in cc2g_internal}
@@ -2801,9 +2891,9 @@ class PdfFont:
 
         baseInvMap = {}
 
-        baseEnc = PdfFontDictFunc.get_base_encoding(self.font)
+        if rebase:
 
-        if rebase and baseEnc:
+            baseEnc = PdfFontDictFunc.get_base_encoding(self.font) or '/WinAnsiEncoding'
 
             baseEncMap = PdfFont.parse_encoding(Encoding = baseEnc, isSymbolic = False)
 

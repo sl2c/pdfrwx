@@ -1805,13 +1805,9 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
     compression, resizing/upsampling, color space conversions.
     '''
 
-    # # Fix predictors
-    # if options.predictors:
-    #     msg('Checking images PNG predictors')
-    #     _ = PdfFilter.uncompress(image_obj)
-    #     if mask != None:
-    #         msg('Checking mask PNG predictors')
-    #         _ = PdfFilter.uncompress(mask)
+    if options.predictors:
+        PdfFilter.uncompress(image_obj, fixPngPredictors = True)
+        return
 
     image = PdfImage(obj = image_obj)
 
