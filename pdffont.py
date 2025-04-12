@@ -768,7 +768,7 @@ class PdfFontGlyphMap:
         if len(s1) != len(s) - 1 or len(s1) == 1:
             s1 = s
 
-        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|vsize[0-9]*|hsize[0-9]*|disp|big|small|sm|upsm|short|ts1|lf|tf|swash|endl))+$','', s1)
+        s1 = re.sub(r'(\.(_|sc|cap|alt[0-9]*|vsize[0-9]*|hsize[0-9]*|disp|big|small|sm|upsm|short|ts1|lf|tf|swash|endl|comp|frac|dnom|numr|osf|tosf|case|lf|uc|ss01|uc.ss01|lc|latn_CAT|latn_TRK))+$','', s1)
  
         # Unicode points of Arabic letter forms in Times New Roman are mapped to logical Unicode points
         s1 = re.sub(r'(\.(init|medi|fina|isol|morocco|finamorocco|urdu))+$','', s1)
@@ -1918,7 +1918,8 @@ class PdfFontFile:
             weight_to_stemv = {'Blond':50, 'Light':68,
                                 'Medium':100, 'NORMAL':100, 'Normal':100, 'Regular':100, 'regular':100,
                                 'Italic':100, 'Roman':100, 'Book':100,
-                                'Semibold':120, 'Bold':140, 'Bold Italic':140}
+                                'Semibold':120, 'DemiBold':120, 'Demibold':120, 'Demi':120,
+                                'Bold':140, 'Bold Italic':140}
             info['StemV'] = weight_to_stemv[weight]
 
         # This initializes char.width-s
@@ -1927,6 +1928,10 @@ class PdfFontFile:
             CharStrings[gname].draw(NullPen()) # Initializes glyph.width-s
 
         # Set the maps
+        # This needs to be sorted out!
+        # info['gid2gname'] = {i:gname for i,gname in enumerate(CharStrings)}
+        # info['encoding'] = {i:gname for i,gname in enumerate(t1.font['Encoding']) 
+        #                      if gname != '.notdef' and gname in CharStrings}
         info['gid2gname'] = {i:gname for i,gname in enumerate(t1.font['Encoding']) 
                              if gname != '.notdef' and gname in CharStrings}
         info['gname2width'] = {gname:CharStrings[gname].width for gname in CharStrings}
@@ -2329,7 +2334,7 @@ class PdfFont:
 
         # Get encodings
         self.cc2g, self.cc2g_internal = self.get_cc2g()
-        
+
         # Set chars widths
         self.widthMissing = PdfFontDictFunc.get_missingWidth(self.font)
         self.cc2width = self.get_cc2w()
@@ -2537,19 +2542,19 @@ class PdfFont:
                     for cid in CIDSet:
                         if cid not in cid2gid: cid2gid[cid] = cid
 
-                if font.ToUnicode:
-                    CMap = PdfFontCMap(toUnicodeDict=font.ToUnicode)
-                    for cc in CMap.cc2unicode:
-                        if ord(cc) not in cid2gid: cid2gid[ord(cc)] = ord(cc)
+                # if font.ToUnicode:
+                #     CMap = PdfFontCMap(toUnicodeDict=font.ToUnicode)
+                #     for cc in CMap.cc2unicode:
+                #         if ord(cc) not in cid2gid: cid2gid[ord(cc)] = ord(cc)
+
+                # If cid2gid is empty, use built-in encoding assume identity encoding
+                if len(cid2gid) == 0 or len(cid2gid) == 1 and 0 in cid2gid:
+                    cid2gid = {gid:gid for gid in gid2gname}
 
                 # Create cc2g
-                if len(cid2gid) == 0 or len(cid2gid) == 1 and 0 in cid2gid:
-                    # If cid2gid is empty, use built-in encoding
+                cc2g = {chr(cid):PdfName(gid2gname.get(gid)) for cid,gid in cid2gid.items() if gid in gid2gname}
+                if len(cc2g) == 0:
                     cc2g = {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
-                else:
-                    cc2g = {chr(cid):PdfName(gid2gname.get(gid)) for cid,gid in cid2gid.items() if gid in gid2gname}
-                    if len(cc2g) == 0:
-                        cc2g = {chr(gid):PdfName(gname) for gid,gname in gid2gname.items()}
 
                 if gname2width := self.info.get('gname2width'):
                     cc2g = {cc:g for cc,g in cc2g.items() if g[1:] in gname2width}
@@ -2718,10 +2723,6 @@ class PdfFont:
             cidEncoded = self.info['ROS'] != None
             if cidEncoded != makeCID:
                 raise ValueError(f'cannot make a {"CID" if makeCID else "Type1C"} font from a {"" if cidEncoded else "non-"}CID-keyed CFF font: {FontName}')
-        if self.pfb:
-            makeCID = False
-            if cc2unicode is not None:
-                warn(f'cc2unicode ignored: {FontName}')
 
         # PDF Ref.: "[A FontFile3 with the /OpenType Subtype can appear in] a Type1 font dictionary
         # [..] if the embedded font program contains a "CFF" table without CIDFont operators."
@@ -2751,6 +2752,7 @@ class PdfFont:
         if not makeCID: # Simple fonts
 
             cc2g = PdfFont.parse_encoding(Encoding = encoding, isSymbolic = isSymbolic)
+
             s = sorted(cc2g)
             FirstChar, LastChar = ord(s[0]), ord(s[-1])
 
@@ -2782,7 +2784,7 @@ class PdfFont:
 
         else: # CID fonts
 
-            # CIDToGIDMap
+            # make cig2gname & cig2gid
             if not cc2unicode or len(cc2unicode) == 0:
                 cid2gname = self.info.get('gid2gname')
                 cid2gid = {cid:cid for cid in cid2gname}
@@ -2797,13 +2799,6 @@ class PdfFont:
                 gname2gid = {gname:gid for gid,gname in self.info['gid2gname'].items()}
                 cid2gname = {ord(cc):unicode2gname.get(ord(u)) for cc,u in cc2unicode.items() if ord(u) in unicode2gname}
                 cid2gid = {cid:gname2gid.get(gname) for cid,gname in cid2gname.items()}
-
-            # make CIDToGIDMap
-            maxCID = sorted(cid2gid)[-1]
-            gids = [cid2gid.get(cid,0) for cid in range(maxCID + 1)]
-            CIDToGIDMap = IndirectPdfDict(
-                stream=py23_diffs.convert_load(b''.join(bytes([gid >> 8, gid & 255]) for gid in gids))
-            )
 
             # Create ToUnicode
             ToUnicode = None
@@ -2826,9 +2821,21 @@ class PdfFont:
 
             W = PdfArray([x for cid,w in cid2width.items() for x in [cid,PdfArray([w])]])
 
-
             # CIDFontSubtype; see PDF Ref. Sec. 5.8, Table 5.23: Embedded font organization for various font types
-            CIDFontSubtype = PdfName('CIDFontType2') if otfWithGlyf or self.ttf else PdfName('CIDFontType0')
+            if otfWithGlyf or self.ttf:
+
+                CIDFontSubtype = PdfName('CIDFontType2')
+
+                maxCID = sorted(cid2gid)[-1]
+                gids = [cid2gid.get(cid,0) for cid in range(maxCID + 1)]
+                CIDToGIDMap = IndirectPdfDict(
+                    stream=py23_diffs.convert_load(b''.join(bytes([gid >> 8, gid & 255]) for gid in gids))
+                )
+
+            else:
+
+                CIDFontSubtype = PdfName('CIDFontType0')
+                CIDToGIDMap = None
 
             self.font = IndirectPdfDict(
                 Type=PdfName('Font'),
@@ -3138,6 +3145,9 @@ class PdfFont:
         affects Type3 fonts.
         '''
 
+        courier = PdfFont(name = PdfName.Courier)
+        arial = PdfFont(name = PdfName.Arial)
+
         # Font size & scale
         fs = 14 
         scale = 1 if self.font.Subtype != '/Type3' else t3scale if t3scale != 'auto' \
@@ -3245,6 +3255,7 @@ class PdfFont:
             x,y = 10*(2*col), -2*10*row
 
             if gname != '':
+                
                 squeeze = 100 * 12 / len(gname) if len(gname) > 12 else 100
                 gnameHex = gname.encode('latin').hex()
                 streams[n] += f'1 0 0 1 {x} {y - 4} Tm {squeeze} Tz <{gnameHex}> Tj 100 Tz\n'
@@ -3273,14 +3284,10 @@ class PdfFont:
         # Switch back from text mode
         for n in streams: streams[n] += 'ET\n'
 
-        def make_page_template(n:int):
-            '''
-            Makes a page template — a page an empty font table.
-            n is the code range page number: n = 0 is 0-255 etc.
-            '''
+        if len(streams) == 0: streams[0] = ''
 
-            courier = PdfFont(name = PdfName.Courier)
-            arial = PdfFont(name = PdfName.Arial)
+        pages = []
+        for n in sorted(streams):
 
             # Set-up the page
             page = PdfDict(
@@ -3300,7 +3307,8 @@ class PdfFont:
             if self.info.get('unicode2gname'):
                 ToUnicode += ', InternalUnicode'
 
-            Embedded = '' if self.is_embedded() else ', Not embedded'
+            CharProcs = f', CharProcs({len(self.font.CharProcs)})' if self.font.CharProcs else ''
+            Embedded = '' if self.is_embedded() or self.font.Subtype == '/Type3' else ', Not embedded'
             Symbolic = ', S-bit' if self.is_symbolic() else ''
             subtype = PdfFontDictFunc.get_subtype_string(self.font)
             encoding = PdfFontDictFunc.get_encoding_name_string(self.font) or '/NoEncoding'
@@ -3308,7 +3316,7 @@ class PdfFont:
             ttfCMaps = ' '.join(k[4:] for k in self.info if re.match('cmap', k))
             if len(ttfCMaps) > 0: ttfCMaps = ', CMaps: '+ttfCMaps
 
-            subtitle = f'{subtype}, {encoding}{ttfCMaps}{ToUnicode}{Embedded}{Symbolic}'
+            subtitle = f'{subtype}, {encoding}{ttfCMaps}{ToUnicode}{Embedded}{CharProcs}{Symbolic}'
 
             stream  = f'1 0 0 1 40 320 cm BT\n'
             stream += f'1 0 0 1 -10 40 Tm /C 10 Tf ({title}) Tj\n'
@@ -3318,19 +3326,10 @@ class PdfFont:
             for row in range(16): stream += f'1 0 0 1 -10 {-10*(2*row) + 2} Tm ({row:X}) Tj\n'
             stream += 'ET\n'
 
-            page.Contents.stream = stream
+            page.Contents.stream = stream + streams[n]
 
-            return page
-
-        pages = []
-        for n in sorted(streams):
-            page = make_page_template(n)
-            page.Contents.stream += streams[n]
             pages.append(page)
-        
-        if len(pages) == 0:
-            pages.append(make_page_template(0))
- 
+         
         return pages
 
     # -------------------------------------------------------------------------------- subset()

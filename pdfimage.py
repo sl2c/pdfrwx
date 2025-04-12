@@ -470,13 +470,15 @@ class PdfImage(AttrDict):
                 width, height = int(obj.Width), int(obj.Height)
                 cpp = self.get_cpp()
 
-                # Sometimes /BitsPerComponent is incorrect
-                bytesPerLine = len(stream) / height
-                if bytesPerLine == int(bytesPerLine):
-                    bpc_implied = (bytesPerLine * 8) / (width * cpp) if len(stream) > 1 else 1
-                    if bpc_implied != self.bpc and int(bpc_implied) == bpc_implied:
-                        warn(f'replacing bad image xobject\'s bpc = {self.bpc} with the implied bpc = {int(bpc_implied)}')
-                        self.bpc = int(bpc_implied)
+                # # Sometimes /BitsPerComponent is incorrect
+                # bytesPerLine = len(stream) / height
+                # if bytesPerLine == int(bytesPerLine):
+                #     bpc_implied = (bytesPerLine * 8) / (width * cpp) if len(stream) > 1 else 1
+                #     if bpc_implied != self.bpc and int(bpc_implied) == bpc_implied:
+                #         warn(f'replacing bad image xobject\'s bpc = {self.bpc} with the implied bpc = {int(bpc_implied)}')
+                #         warn(f'images size: {width}x{height}, cpp: {cpp}, stream length: {len(stream)}')
+                #         warn(f'{stream}')
+                #         self.bpc = int(bpc_implied)
 
                 array = PdfFilter.unpack_pixels(stream, width, cpp, self.bpc, truncate = True)
                 if array.shape[0] > height:
@@ -508,9 +510,11 @@ class PdfImage(AttrDict):
 
                     width, height = int(obj.Width), int(obj.Height)
                     pil = Image.frombytes('1',(width,height),result)
-                    if parm.BlackIs1 != PdfObject('true'):
-                        pil = ImageChops.invert(pil)
                     self.set_pil(pil)
+
+                    if parm.BlackIs1 != PdfObject('true'):
+                        msg(f'inverting /CCITTFaxDecode image with /EncodedByteAlign = true because BlackIs1 is {parm.BlackIs1}')
+                        self.set_pil(ImageChops.invert(self.pil))
 
                 else:
 
@@ -550,10 +554,15 @@ class PdfImage(AttrDict):
             self.SMask = obj.SMask
 
             # Invert /DeviceCMYK & /DeviceN JPEGs
-            # cs_name = PdfColorSpace.get_name(self.ColorSpace)
             if self.pil and self.pil.mode == 'CMYK' and self.pil.format == 'JPEG':
                 msg(f'inverting CMYK JPEG after decoding')
                 self.set_pil(ImageChops.invert(self.pil))
+
+            # # Invert image masks
+            # if obj.ImageMask == PdfObject('true'):
+            #     msg(f'inverting bitonal image mask after decoding')
+            #     self.set_pil(ImageChops.invert(self.get_pil()))
+
 
         else:
 
@@ -916,7 +925,7 @@ class PdfImage(AttrDict):
         '''
         ext = {'TIFF':'.tif', 'PNG':'.png', 'JPEG':'.jpg', 'JPEG2000':'.jp2', 'JBIG2':'jb2'}
 
-        addAlpha = render and (self.Mask or self.SMask)
+        addAlpha = render and (self.Mask is not None or self.SMask is not None)
 
         if Format == 'JPEG' and addAlpha:
             raise ValueError(f'cannot save an image transparency as JPEG')
@@ -926,17 +935,11 @@ class PdfImage(AttrDict):
                         else 'JPEG2000' if self.jp2 \
                         else 'JPEG' if self.jpeg \
                         else 'TIFF'
-            if addAlpha and Format == 'JPEG':
+            if addAlpha and Format in ['JPEG','JPEG2000']:
                 Format = 'TIFF'
 
         if Format not in ext: raise ValueError(f'cannot save in format: {Format}')
 
-
-        # Save original JPEG bytes object whenever possible
-        if Format == 'JPEG' and self.jpeg and not render and not addAlpha and Q == None \
-                and (self.get_mode() != 'CMYK' or not invertCMYK):
-            msg(f'saving original (unmodified) JPEG file')
-            return self.jpeg, '.jpg'
 
         if addAlpha:
             msg('rendering alpha')
@@ -968,31 +971,47 @@ class PdfImage(AttrDict):
                                             Q = Q, CR = CR)
         else:
  
-            # Create pil
-            pil = self.get_pil()
-
+            modified = False
             if render:
+
                 modified = self.render()
                 if modified:
-                    msg(f'rendered pil')
+                    msg(f'rendered image')
+
                 if addAlpha and self.get_mode() not in ['L', 'RGB']:
-                    self.change_mode('RGB' if self.get_mode() != '1' else 'L', intent)
-                pil = self.get_pil()
-                PdfImage._pil_set_colorspace(pil, self.ColorSpace)
+                    newMode = 'RGB' if self.get_mode() != '1' else 'L'
+                    self.change_mode(newMode, intent)
+                    msg(f'changed mode {self.get_mode()} -> {newMode} to allow adding alpha')
+                    modified = True
 
-                if addAlpha:
-                    msg('adding alpha')
-                    # alpha.render()
-                    assert alpha.get_cpp() == 1
-                    alpha.change_mode('RGB' if alpha.get_mode() != '1' else 'L', intent)
-                    alpha_pil = alpha.get_pil()
-                    # invert bitonal masks
-                    if self.Mask and self.Mask.ImageMask == PdfObject('true'):
-                        alpha_pil = ImageChops.invert(alpha_pil)
-                    PdfImage._pil_set_colorspace(alpha_pil, alpha.ColorSpace)
-                    pil.putalpha(alpha_pil)
+            mustInvertCMYK = invertCMYK and self.get_mode() == 'CMYK' and Format == 'JPEG'
+ 
+            if Format == 'JPEG' and self.jpeg \
+                    and not modified and not addAlpha and not mustInvertCMYK \
+                    and Q is None:
+                msg(f'saving original (unmodified) JPEG file')
+                return self.jpeg, '.jpg'
 
-            if invertCMYK and pil.mode == 'CMYK' and Format == 'JPEG':
+            pil = self.get_pil()
+            PdfImage._pil_set_colorspace(pil, self.ColorSpace)
+
+            if addAlpha:
+
+                msg('adding alpha')
+                # alpha.render()
+                assert alpha.get_cpp() == 1
+                alpha.change_mode('RGB' if alpha.get_mode() != '1' else 'L', intent)
+                alpha_pil = alpha.get_pil()
+
+                # invert bitonal masks
+                if self.Mask and self.Mask.ImageMask == PdfObject('true'):
+                    alpha_pil = ImageChops.invert(alpha_pil)
+
+                PdfImage._pil_set_colorspace(alpha_pil, alpha.ColorSpace)
+                pil.putalpha(alpha_pil)
+
+            # Shouldn't this be inverted before adding alpha?
+            if mustInvertCMYK:
                 msg('inverting CMYK JPEG before encoding')
                 pil = ImageChops.invert(pil)
 
@@ -1007,14 +1026,9 @@ class PdfImage(AttrDict):
             stream = None
 
             if Format == 'JPEG':
-                # !!! THIS IS DUPLICATE LOGIC (SEE ABOVE FOR THE SAME MESSAGE) !!!
-                if self.jpeg:
-                    msg(f'saving original (unmodified) JPEG file')
-                    stream = self.jpeg
-                else:
-                    msg(f'saving with Format = {Format}, Q = {Q}')
-                    pil.save(bs, Format, quality=Q, optimize = optimize, icc_profile = icc_profile,
-                                info = pil.info, dpi=dpi)
+                msg(f'saving with Format = {Format}, Q = {Q}')
+                pil.save(bs, Format, quality=Q, optimize = optimize, icc_profile = icc_profile,
+                            info = pil.info, dpi=dpi)
             elif Format == 'PNG':
                 pil.save(bs, Format, optimize = optimize, icc_profile = icc_profile)
             elif Format == 'TIFF':
@@ -1121,7 +1135,7 @@ class PdfImage(AttrDict):
 
         elif Format == 'JPEG':
 
-            stream, _ = image.saveAs('JPEG', Q, invertCMYK = True)
+            stream, _ = image.saveAs(Format = 'JPEG', Q = Q, invertCMYK = True)
             Filter = PdfName('DCTDecode')
 
         elif Format == 'JPEG2000':
@@ -1176,6 +1190,11 @@ class PdfImage(AttrDict):
 
             Filter = 'CCITTFaxDecode'
             pil = self.get_pil()
+
+            # if isMask:
+            #     msg('inverting bitonal image mask before encoding')
+            #     pil = ImageChops.invert(pil)
+
             stream = PdfImage._tiff_get_strip(PdfImage._tiff_write(pil))
             DecodeParms = PdfDict(K = -1,
                                   Columns = self.w(),
@@ -1187,7 +1206,7 @@ class PdfImage(AttrDict):
             Filter = 'JPXDecode'
             stream = py23_diffs.convert_load(self.jp2)
 
-        elif not self.pil or self.pil.format in ['RAW', 'GIF', 'PNG', 'TIFF', 'JPEG2000', None]:
+        elif not self.pil or self.pil.format in ['RAW', 'GIF', 'PNG', 'BMP', 'TIFF', 'JPEG2000', None]:
 
             Filter = 'FlateDecode'
             stream = zlib.compress(self.to_bytes())
@@ -1807,7 +1826,7 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
 
     if options.predictors:
         PdfFilter.uncompress(image_obj, fixPngPredictors = True)
-        return
+        return True
 
     image = PdfImage(obj = image_obj)
 
@@ -1815,16 +1834,25 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
 
     modified = False
 
+    N = options.subsample
+    if N and N > 1:
+        a = image.get_array()
+        msg(f'subsampling /{N}')
+        image.set_array(a[::N, ::N])
+        modified = True
+
     if image.bpc == 1:
 
         if options.scale2x:
+            a = image.get_array()
             msg(f'upsampling with scale2x')
-            image.set_array(SImage.scale2x(image.get_array())[0])
+            image.set_array(SImage.scale2x(a)[0])
             modified = True
 
         if options.despeckle:
+            a = image.get_array()
             msg(f'despeckling, threshold = {options.despeckle}')
-            image.set_array(SImage.despeckle(image.get_array(), threshold = options.despeckle))
+            image.set_array(SImage.despeckle(a, threshold = options.despeckle))
             modified = True
 
     else:
@@ -1843,27 +1871,48 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
             msg(f'converting colorspace: {image.get_mode()} --> {mode}')
             modified = image.change_mode(mode, intent)
 
+        if options.contrast and image.get_mode() in ['RGB', 'CMYK']:
+            a = image.get_array()
+            msg('correcting tint' if options.tint else 'adjusting luminosity')
+            ranges = SImage.getRanges(a, mode=options.contrast, method=options.hist) if options.tint \
+                        else SImage.getRanges(SImage.toGray(a), mode = options.contrast, method=options.hist)
+            if image_obj.Decode is None and options.tint and options.preserve:
+                p = lambda x: round(x * 10000)/10000
+                ranges = [(r[0]/255, r[1]/255) for r in ranges]
+                decode = [(p(-r[0]/(r[1]-r[0])), p((1-r[0])/(r[1]-r[0]))) for r in ranges]
+                msg(f'preserving original image data, using DECODE array to correct tint: {decode}')
+                image_obj.Decode = PdfArray([f for d in decode for f in d])
+                return True
+            else:
+                msg(f'replacing image')
+                image.set_array(SImage.contrast(a, ranges = ranges))
+                modified = True
+
         if options.upsample:
             if PdfColorSpace.get_name(image.ColorSpace) == '/Indexed':
                 image.render()
+            a = image.get_array()
             msg(f'upsampling: alpha = {options.alpha}, bounds = {options.bounds}')
-            image.set_array(SImage.superResolution(image.get_array(), alpha = options.alpha, bounds = options.bounds))
+            image.set_array(SImage.superResolution(a, alpha = options.alpha, bounds = options.bounds))
             modified = True
 
         if options.resample:
             f = options.resample
             if PdfColorSpace.get_name(image.ColorSpace) == '/Indexed':
                 image.render()
+            a = image.get_array()
             msg(f'resampling: factor = {f}, method = bicubic')
-            image.set_array(SImage.resize(image.get_array(), int(image.w() * f), int(image.h() * f)))
+            image.set_array(SImage.resize(a, int(image.w() * f), int(image.h() * f)))
             modified = True
 
         if options.bitonal and image.get_mode() != '1':
             image.render(pdfPage = pdfPage)
             cs_name = PdfColorSpace.get_name(image.ColorSpace)
-            msg(f'converting {cs_name} --> 1')
+            msg(f'converting {cs_name} --> L')
             image.change_mode('L', intent)
-            image = PdfImage(array = SImage.toBitonal(image.get_array(), threshold = options.threshold))
+            a = image.get_array()
+            msg('converting L -> 1')
+            image = PdfImage(array = SImage.toBitonal(a, threshold = options.threshold))
             modified = True
 
     if options.zip and image.bpc != 1:
@@ -1883,11 +1932,9 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
         image_obj.Decode = obj.Decode
         image_obj.Width = obj.Width
         image_obj.Height = obj.Height
-        image_obj.Interpolate = PdfObject('true') if options.interpolate else None
 
-    # print('obj:')
-    # print(obj)
-
+    return modified
+ 
 def getPageRange(s:str):
     '''
     Parses a page range string formatted as 'N1[,N2-N3[,..]]' and returns a list of the form: [N1, N2, N2+1, ... N3].
@@ -1924,12 +1971,18 @@ if __name__ == '__main__':
     ap.add_argument('-quality', '-q', type=int, default=95, metavar='Q', help='JPEG/JPEG 2000 compression quality; Q=0..100 (def=95)')
     ap.add_argument('-colorspace', '-cs', type=str, metavar='S', choices=['gray', 'rgb', 'cmyk'], help='convert images to color space; S = gray|rgb|cmyk')
 
+    ap.add_argument('-contrast', type=str, nargs='?', metavar='Mode', const='both', choices=['lows','highs','both'], help='boost contrast; Mode = [lows|highs|both], def=both')
+    ap.add_argument('-hist', type=int, metavar='Method', choices=[1,2,3], help='histogram estimation method for use with -contrast, def = 1')
+    ap.add_argument('-tint', action='store_true', help='when used with -contrast, removes tint')
+    ap.add_argument('-preserve', action='store_true', help='when used with -contrast -tint, uses Decode arrays, preserves original image data intact')
+
     ap.add_argument('-intent', type=str, metavar='I', choices = ['absolute', 'relative', 'perceptual', 'saturation', 'native', 'none'],
                     default = 'perceptual',
                     help='rendering intent; I = absolute|relative|perceptual|saturation|native|none (def=\'perceptual\')')
 
     ap.add_argument('-resample', type=float, metavar='F', help='resample color/gray images with bicubic interpolation')
     ap.add_argument('-upsample', action='store_true', help='upsample color/gray images x2 using Bayesian algorithm')
+    ap.add_argument('-subsample', type=int, metavar='N', help='subsample images: keep only pixels whose coordinates are multiples of N')
     ap.add_argument('-predictors', action='store_true', help='fixes incorrect PNG predictor values in images\' DecodeParms dicts')
     ap.add_argument('-alpha', type=int, metavar='A', default=2, help='alpha for the upsampling algo, higher=sharper; A=1..10, def=2')
     ap.add_argument('-bounds', type=str, metavar='B', default='none', choices=['softmax','local','none'], help='bounds for the upsampling algo, B=softmax|local|none, def=none')
@@ -2025,8 +2078,14 @@ if __name__ == '__main__':
                 print(LINE_SINGLE)
 
                 # ---------- Modify images ----------
-                if options.zip or options.upsample or options.resample or options.colorspace \
-                        or options.bitonal or options.predictors \
+                if options.zip \
+                        or options.upsample \
+                        or options.resample \
+                        or options.subsample \
+                        or options.colorspace \
+                        or options.contrast \
+                        or options.bitonal \
+                        or options.predictors \
                         or options.despeckle \
                         or options.scale2x \
                         or options.auto:
@@ -2058,10 +2117,16 @@ if __name__ == '__main__':
 
                     if PdfImage.xobject_get_bpc(obj) != 1:
                         msg('recompressing image')
-                        PdfImage.recompress(obj, Format='JPEG' if options.jpeg else 'JPEG2000' , Q=options.quality)
+                        PdfImage.recompress(obj,
+                                            Format='JPEG' if options.jpeg else 'JPEG2000' ,
+                                            Q=options.quality)
                         # if image_obj.SMask:
                         #     msg('recompressing mask')
                         #     PdfImage.recompress(image_obj.SMask, Format='JPEG', Q=options.quality)
+
+                if options.interpolate:
+                    PROCESSING_REQUESTED = True
+                    obj.Interpolate = PdfObject('true')
 
                 # ---------- Extract images ----------
                 if not PROCESSING_REQUESTED:
@@ -2083,13 +2148,16 @@ if __name__ == '__main__':
             if options.upsample: suffix += f'-upsample={options.alpha}'
             if options.bounds != 'none': suffix += f'-bounds={options.bounds}'
             if options.resample: suffix += '-resample'
+            if options.subsample: suffix += '-subsample'
             if options.colorspace: suffix += f'-{options.colorspace}'
+            if options.contrast: suffix += '-contrast'
             if options.zip: suffix += f'-zip'
             if options.jpeg: suffix += f'-jpeg={options.quality}'
             if options.j2k: suffix += f'-j2k={options.quality}'
             if options.bitonal: suffix += '-bitonal'
             if options.predictors: suffix += '-predictors'
             if options.descreen: suffix += f'-descreen={options.descreen}'
+            if options.interpolate: suffix += f'-interpolate'
             assert suffix != ''
             pdfOutPath = fileBase + suffix + fileExt
             print(LINE_DOUBLE)

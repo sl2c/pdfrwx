@@ -1,6 +1,7 @@
 # Some extra glyph names that were encountered
 .notdef;FFFD
 .null;0000
+CR;000D
 # ============================================== Redefine Greek
 Delta;0394
 Omega;03A9
@@ -533,6 +534,10 @@ exdoubleintegralloop;2B2D
 extrippleintegralloop;2B2D
 # upsquarebracketleft;
 # upsquarebracketright;
+# ============================================== DINPro
+breveCyrLc;02D8
+breveCyrUc;02D8
+diedot;02D9
 # ============================================== Wingdings3
 a2opleftrt;2B80
 # ============================================== LucidaSansUnicode
