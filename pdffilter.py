@@ -55,9 +55,13 @@ class PdfFilter:
         parms = encapsulate(obj.DecodeParms)
 
         streamNeedsFixing = False
+        bpcReduced = False
 
         f = 0
         while f < len(filters):
+
+            if bpcReduced:
+                raise ValueError(f'PIL limitation: a PNG filter with bpc > 8 cannot be followed by another filter')
 
             filter = filters[f]
             if filter == 'null': filter = None
@@ -87,7 +91,8 @@ class PdfFilter:
 
             elif filter in ['/FlateDecode', '/Fl', '/LZWDecode', '/LZW']:
 
-                # PDF Ref. 1.7 Sec. 3.3.3
+                # First, uncompress; PDF Ref. 1.7 Sec. 3.3.3
+
                 if filter in ['/FlateDecode','/Fl']:
                     try: stream = zlib.decompress(stream)
                     except:
@@ -101,10 +106,12 @@ class PdfFilter:
                     earlyChange = int(get_key(parm, '/EarlyChange', '1'))
                     stream = b''.join(x for x in PdfFilter.lzw_decode(stream, earlyChange))
 
+                # Second, deal with the /Predictor filters
+
                 predictor = int(get_key(parm, '/Predictor', '1'))
+                columns = int(get_key(parm, '/Columns', '1'))
                 colors = int(get_key(parm, '/Colors', '1'))
                 bpc = int(get_key(parm, '/BitsPerComponent', '8'))
-                columns = int(get_key(parm, '/Columns', '1'))
 
                 if predictor == 1: # No predictor
 
@@ -112,55 +119,16 @@ class PdfFilter:
 
                 elif 10 <= predictor <= 15: # PNG filters
 
-                    # Predictors operate on blocks whose size is determined by
-                    # the entries in obj.DecodeParm and not by the image parameters!
-                    # So, in general n_blocks != height, block_size != width + 1
-                    row_size = (columns * colors * bpc + 7) // 8 + 1 # +1 is the predictor byte at the start
-                    n_rows = (len(stream) + row_size - 1 ) // row_size
+                    if bpc > 8:
+                        if obj.Subtype != '/Image':
+                            raise ValueError(f'PIL limitation: /FlateDecode-compressed streams with bpc = {bpc} are only supported for images')
+                        bpcReduced = True
 
-                    # Pad with null bytes if needed
-                    if res := n_rows * row_size - len(stream):
-                        stream += bytes([0]*res)
-
-                    if colors in [1,2,3,4]:
-
-                        mode = {1:'L', 2:'LA', 3:'RGB', 4:'RGBA'}.get(colors)
-
-                        # For fastest decoding, make a PNG image from the stream and decode it using PIL
-                        stream = PdfFilter.make_png_image(width = columns,
-                                                        height = n_rows,
-                                                        bpc = bpc,
-                                                        mode = mode,
-                                                        stream = zlib.compress(stream),
-                                                        palette = None).tobytes()
-
-                    else:
-
-                        # Raise an exception for now to catch an actual PDF with colors > 4 to test the code below
-                        raise ValueError(f'unsupported number of /Colors = {colors} with filter: {filter}')
-
-                        # # If # of colors is not 1 or 3 we transform each color component into a
-                        # # grayscale PNG image and decode it using PIL; the components are then reassembled
-    
-                        # array = np.frombuffer(stream, dtype='uint8').reshape(n_rows, row_size)
-
-                        # predVector = array[:,0].reshape(n_rows, 1)
-                        # array = array[:,1:].reshape(n_rows, row_size, colors)
-                        # array = np.transpose(array,(2,0,1))
-
-                        # result = np.zeros(height*width*colors, dtype='uint8').reshape(colors,height,width)
-                        # for c in range(colors):
-                        #     encoded = np.hstack((predVector,array[c])).tobytes()
-                        #     decoded = PdfFilter.make_png_image(width,height,bpc,'L',zlib.compress(encoded),None).tobytes()
-                        #     component = np.frombuffer(decoded,dtype='uint8').reshape(height, width)
-                        #     result[c] = component
-
-                        # stream = np.transpose(result,(1,2,0)).tobytes()
-
-
-                    # Remove padding
-                    if res:
-                        stream = stream[:-res]
+                    stream = PdfFilter.remove_png_predictor(stream = stream,
+                                                            columns = columns,
+                                                            colors = colors,
+                                                            bpc = bpc)
+                    
 
                     # Fix PNG Predictor value: set it to 15 (fixes Multivalent bug)
                     # its actual value doesn't matter: PDF Ref. Sec. 3.3.3
@@ -204,6 +172,10 @@ class PdfFilter:
             obj.stream = py23_diffs.convert_load(zlib.compress(stream))
             obj.Length = len(obj.stream)
 
+        if result.BitsPerComponent is not None and int(result.BitsPerComponent) > 8:
+            warn(f'PIL is limited to 8 bpc; changing /BitsPerComponent: {result.BitsPerComponent} -> 8')
+            result.BitsPerComponent = 8
+
         return result
 
     # -------------------------------------------------------------------- unpack_pixels()
@@ -231,12 +203,14 @@ class PdfFilter:
         height = len(stream) // bytesPerLine
 
         # Truncate
-        extraBits = lambda: len(stream) % bytesPerLine if bytesPerLine > 1 else 0
-        if truncate and extraBits() == 1 and stream[-1] == 10:
+        e = len(stream) - bytesPerLine * height
+        if truncate and e == 1 and stream[-1] == 10:
             warn(f"truncating stream of length {len(stream)}")
             stream = stream[:-1]
-        if extraBits() != 0:
-            raise ValueError(f'{extraBits()} extra bits in stream: length = {len(stream)}, bytesPerLine = {bytesPerLine}')
+        e = len(stream) - bytesPerLine * height
+        if e > 0:
+            warn(f'{e} extra bytes in stream: length = {len(stream)}, bytesPerLine = {bytesPerLine}; truncating')
+            stream = stream[:-e]
 
         # Determine dtype
         dtypes = {1:np.dtype('>u1'), 2:np.dtype('>u2'), 4:np.dtype('>u4')}
@@ -280,6 +254,63 @@ class PdfFilter:
             array = np.unpackbits(array, axis=3)[:,:,:,:bpc].reshape(height, width * cpp * bpc)
             array = np.packbits(array, axis=1)
         return array.tobytes()
+
+    @staticmethod
+    def remove_png_predictor(stream:bytes, columns:int, colors:int, bpc:int):
+        '''
+        '''
+        # Predictors operate on blocks whose size is determined by
+        # the entries in obj.DecodeParm and not by the image parameters!
+        # So, in general n_blocks != height, block_size != width + 1
+        row_size = (columns * colors * bpc + 7) // 8 + 1 # +1 is the predictor byte at the start
+        n_rows = (len(stream) + row_size - 1 ) // row_size
+
+        # Pad with null bytes if needed
+        s = stream
+        if res := n_rows * row_size - len(stream):
+            s = stream + bytes([0]*res)
+
+        if colors in [1,2,3,4]:
+
+            mode = {1:'L', 2:'LA', 3:'RGB', 4:'RGBA'}.get(colors)
+
+            # For fastest decoding, make a PNG image from the stream and decode it using PIL
+            stream = PdfFilter.make_png_image(width = columns,
+                                            height = n_rows,
+                                            bpc = bpc,
+                                            mode = mode,
+                                            stream = zlib.compress(stream),
+                                            palette = None).tobytes()
+        else:
+
+            # Raise an exception for now to catch an actual PDF with colors > 4 to test the code below
+            raise ValueError(f'unsupported number of /Colors = {colors} with filter: {filter}')
+
+            # # If # of colors is not 1 or 3 we transform each color component into a
+            # # grayscale PNG image and decode it using PIL; the components are then reassembled
+
+            # array = np.frombuffer(stream, dtype='uint8').reshape(n_rows, row_size)
+
+            # predVector = array[:,0].reshape(n_rows, 1)
+            # array = array[:,1:].reshape(n_rows, row_size, colors)
+            # array = np.transpose(array,(2,0,1))
+
+            # result = np.zeros(height*width*colors, dtype='uint8').reshape(colors,height,width)
+            # for c in range(colors):
+            #     encoded = np.hstack((predVector,array[c])).tobytes()
+            #     decoded = PdfFilter.make_png_image(width,height,bpc,'L',zlib.compress(encoded),None).tobytes()
+            #     component = np.frombuffer(decoded,dtype='uint8').reshape(height, width)
+            #     result[c] = component
+
+            # stream = np.transpose(result,(1,2,0)).tobytes()
+
+
+        # Remove padding
+        if res:
+            stream = stream[:-res]
+
+        return stream 
+           
 
     # -------------------------------------------------------------------- make_png_image()
 

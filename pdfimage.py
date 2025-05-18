@@ -239,10 +239,6 @@ class PdfColorSpace:
         h,w = array.shape[:2]
         assert array.ndim in [2,3]
 
-        if bpc == 1:
-            warn(f'cannot apply colorspace {name} to a bitonal image; skipping')
-            return cs, array
-
         msg(f'applying color space: {name}')
         Matte = mask.Matte if mask else None
         default_decode = PdfDecodeArray.get_default(cs, bpc)
@@ -252,6 +248,11 @@ class PdfColorSpace:
         if applyDecode:
             Decode = Decode or default_decode
             array = PdfDecodeArray.decode(array, Decode, bpc)
+
+        if bpc == 1:
+            if cs != '/DeviceGray':
+                warn(f'cannot apply colorspace {name} to a bitonal image; skipping')
+            return cs, array
 
         # Matte
         if Matte:
@@ -387,6 +388,11 @@ class PdfDecodeArray:
         '''
         assert Decode
         msg(f'applying Decode: {Decode}')
+
+        if bpc == 1:
+            assert Decode == [0,1] or Decode == [1,0]
+            return array if Decode == [0,1] else np.logical_not(array)
+
         INTERPOLATE = lambda x, xmin, xmax, ymin, ymax: ymin + ((x - xmin) * (ymax - ymin)) / (xmax - xmin)
         iMax = float((1<<bpc) - 1)
         if array.ndim == 2: array = np.dstack([array])
@@ -404,6 +410,11 @@ class PdfDecodeArray:
         to encoded ("stream space", uint8: 0..255) representation.
         '''
         msg(f'applying Encode: {Decode}')
+
+        if array.dtype == bool:
+            assert Decode == [0,1] or Decode == [1,0]
+            return array if Decode == [0,1] else np.logical_not(array)
+
         INTERPOLATE = lambda x, xmin, xmax, ymin, ymax: ymin + ((x - xmin) * (ymax - ymin)) / (xmax - xmin)
         if array.ndim == 2: array = np.dstack([array])
         N = array.shape[-1] # number of colors
@@ -417,10 +428,6 @@ class PdfDecodeArray:
 # ========================================================================== class PdfDecodedImage
 
 class PdfImage(AttrDict):
-
-    # To do:
-    # 1) Lab color
-    # 2) color reductions
 
     formats = ['array', 'pil', 'tiff', 'jbig2', 'jpeg', 'jp2', 'png']
 
@@ -637,6 +644,9 @@ class PdfImage(AttrDict):
 
     def render(self, pdfPage:PdfDict = None, debug:bool = False):
         '''
+        This is a wrapper for `PdfImage.apply_colorspace(self.ColorSpace, self.SMask)` which also checks for
+        the page's default colorspaces, if they are defined, and uses them in place of
+        the (uncalibrated) `/DeviceGray`,`/DeviceRGB` and `/DeviceCMYK`.
         '''
         if self.isRendered:
             warn('image already rendered; skipping')
@@ -675,6 +685,17 @@ class PdfImage(AttrDict):
 
     def apply_colorspace(self, cs:CS_TYPE, mask:PdfDict = None):
         '''
+        Applies the given colorspace to self, using the following steps:
+
+        1) decodes the image using the `self.Decode` or the default `/Decode` array
+        (see help in `PdfDecodeArray.get_default()`);
+        2) if `cs` is an `/Indexed` colorspace, remaps the image using the provided palette;
+        3) if `cs` is a `/Separation`, `/DeviceN` or `/NChannel` colorspace, 
+        or `mask` and `mask.Matte` are both not `None` (the mask is a pre-multiplied alpha)
+        calls `PdfColorSpace.reduce(cs, mask)` on the resulting image.
+        4) encodes the image using the appropriate default `/Decode` array for the obtained colorspace.
+
+        Returns `True`/`False` depending on whether `self` has actually been modified.
         '''
         actualDecode  = PdfDecodeArray.get_actual(self.Decode, cs, self.bpc)
         defaultDecode = PdfDecodeArray.get_default(cs, self.bpc)
@@ -714,7 +735,8 @@ class PdfImage(AttrDict):
 
             # Reduce palette; comment this of if you do not want render() to reduce palettes
             self.ColorSpace = palette_cs
-            self.set_array(palette_array[self.get_array()])
+            arr = self.get_array().astype(np.uint8)
+            self.set_array(palette_array[arr])
             self.bpc = 8
             self.Decode = None
 
@@ -726,7 +748,8 @@ class PdfImage(AttrDict):
 
             self.ColorSpace, array = PdfColorSpace.reduce(cs, self.get_array(), actualDecode, self.bpc, mask)
             self.set_array(array)
-            self.bpc = 8
+            if self.bpc != 1:
+                self.bpc = 8
             self.Decode = None
 
             modified = True
@@ -965,8 +988,9 @@ class PdfImage(AttrDict):
                 assert Q or CR
                 if Q: assert 0 < Q <= 100
                 if CR: assert CR > 1
+                if addAlpha:
+                    raise ValueError(f'JPEG2000 encoding with alpha channel is not implemented')
                 stream = PdfImage._jp2_write(array = self.get_array(),
-                                            alpha = alpha.get_array() if addAlpha else None,
                                             cs = self.ColorSpace,
                                             Q = Q, CR = CR)
         else:
@@ -1476,13 +1500,10 @@ class PdfImage(AttrDict):
     # -------------------------------------------------------------------------------------- _jp2_write()
 
     @staticmethod
-    def _jp2_write(array:np.ndarray, alpha:np.ndarray, cs:CS_TYPE, Q:int, CR:float):
+    def _jp2_write(array:np.ndarray, cs:CS_TYPE, Q:int, CR:float):
         '''
         Encode array as a JPEG2000 image.
         '''
-        if alpha is not None:
-            raise ValueError(f'JPEG2000 encoding with alpha-channel is not implemented')
-
         # make sure colorspace is either grayscale or RGB
         cpp = PdfColorSpace.get_cpp(cs)
         if cpp not in [1,3]:
@@ -1496,11 +1517,13 @@ class PdfImage(AttrDict):
         numres = 6 # the default for large images
         while 1 << numres > min(array.shape[:2]):
             numres -= 1
+        numres = max(numres, 1)
 
         # encode
         with tempfile.TemporaryDirectory() as tmp:
             T = lambda fileName: os.path.join(tmp, fileName)
             # can also try: cratios=[CR*4, CR*2, CR]
+            print(f'encoding JPEG200 with cratios = [{CR}]')
             Jp2k(T('encoded.jp2'), array, colorspace='RGB' if cpp == 3 else 'Gray', cratios=[CR], numres=numres)
             
             return open(T('encoded.jp2'), 'rb').read()
@@ -1696,18 +1719,24 @@ class PdfImage(AttrDict):
         if cs == None:
             del image.palette
             del image.info['icc_profile']
-        else:
-            # Palette
-            palette_cs, palette_array = PdfColorSpace.get_palette(cs)
-            if palette_cs != None:
-                palette_mode = PdfColorSpace.get_mode(palette_cs, 8)
-                assert palette_mode == 'RGB'
-                assert palette_array.shape[-1] == 3
-                image.putpalette(palette_array.tobytes(), rawmode='RGB')
+            return
 
-            # ICC Profile
-            if icc_profile := PdfColorSpace.get_icc_profile(cs):
-                image.info['icc_profile'] = icc_profile
+        # Palette
+        palette_cs, palette_array = PdfColorSpace.get_palette(cs)
+        if palette_cs != None:
+            palette_mode = PdfColorSpace.get_mode(palette_cs, 8)
+            assert palette_mode == 'RGB'
+            assert palette_array.shape[-1] == 3
+
+            if image.mode == '1':
+                image = Image.fromarray(np.array(image).astype(np.uint8))
+                assert image.mode == 'L'
+
+            image.putpalette(palette_array.tobytes(), rawmode='RGB')
+
+        # ICC Profile
+        if icc_profile := PdfColorSpace.get_icc_profile(cs):
+            image.info['icc_profile'] = icc_profile
 
     # -------------------------------------------------------------------------------------- _pil_split_alpha()
 
@@ -1818,7 +1847,7 @@ def jbig2_compress(bitonal_images:dict, cpc:bool = False):
 
 # ============================================================================= modify_image_xobject()
 
-def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:PdfDict):
+def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options):
     '''
     This function performs in-place modifications of an image object, such as: JPEG/JPEG2000
     compression, resizing/upsampling, color space conversions.
@@ -1857,6 +1886,7 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
 
     else:
 
+        # Detect gray/color images that are pure b/w and convert them to bitonal
         if options.auto:
             image.render(pdfPage = pdfPage)
             gray = SImage.toGray(image.get_array())
@@ -1888,6 +1918,12 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
                 image.set_array(SImage.contrast(a, ranges = ranges))
                 modified = True
 
+        # PDF Ref. v1.7, p.555: if SMask is present and has a Matte attribute,
+        # the dimensions of the SMask and the parent image must equal.
+        # Therefore, any resizing of images with Matte SMasks must be done
+        # together with the resizing of the SMasks. We resize both at all times,
+        # not just when the Matte attribute is preset. Just something to keep in mind.
+
         if options.upsample:
             if PdfColorSpace.get_name(image.ColorSpace) == '/Indexed':
                 image.render()
@@ -1895,6 +1931,9 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
             msg(f'upsampling: alpha = {options.alpha}, bounds = {options.bounds}')
             image.set_array(SImage.superResolution(a, alpha = options.alpha, bounds = options.bounds))
             modified = True
+            if image.SMask:
+                msg('upsampling SMask')
+                modify_image_xobject(image.SMask, pdfPage, options)
 
         if options.resample:
             f = options.resample
@@ -1904,6 +1943,9 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options:Pdf
             msg(f'resampling: factor = {f}, method = bicubic')
             image.set_array(SImage.resize(a, int(image.w() * f), int(image.h() * f)))
             modified = True
+            if image.SMask:
+                msg('resampling SMask')
+                modify_image_xobject(image.SMask, pdfPage, options)
 
         if options.bitonal and image.get_mode() != '1':
             image.render(pdfPage = pdfPage)
@@ -1989,7 +2031,7 @@ if __name__ == '__main__':
 
     ap.add_argument('-descreen', type=float, metavar='C', help='descreen images; try confidence C = 3 (in units of stand. dev.)')
 
-    ap.add_argument('-interpolate', action='store_true', help='set /Interpolate flag on images')
+    ap.add_argument('-interpolate', type=str, nargs='?', metavar='BOOL', choices=['true','false'], help='set /Interpolate flag on images to true/false')
 
     options = ap.parse_args()
 
@@ -2025,14 +2067,27 @@ if __name__ == '__main__':
             for pageNo in pageRange:
                 print(f'[{pageNo}]')
                 page = pdf.pages[pageNo-1]
-                bitonal_images = bitonal_images | {id(obj):obj for name, obj in PdfObjects(page, cache=cache) 
-                            if isinstance(obj, PdfDict) and obj.Subtype == PdfName.Image 
-                            and (obj.BitsPerComponent == '1' or obj.ImageMask == PdfObject('true'))}
+
+                bitonal_images_new = {
+                    id(obj):obj
+                        for name, obj in PdfObjects(page, cache=cache) 
+                            if isinstance(obj, PdfDict) 
+                                and obj.Subtype == PdfName.Image
+                                and (
+                                        obj.BitsPerComponent == '1' 
+                                        or obj.ImageMask == PdfObject('true')
+                                    )
+                }
+
+                print(f'Adding {len(bitonal_images_new)} images')
+                bitonal_images = bitonal_images | bitonal_images_new
+
                 pageCount += 1
                 if pageCount == options.dict:
                     jbig2_compress(bitonal_images, cpc = options.cpc)
                     pageCount = 0
                     bitonal_images = {}
+                    cache = set()
             
             if len(bitonal_images) > 0:
                 jbig2_compress(bitonal_images, cpc = options.cpc)
@@ -2059,6 +2114,12 @@ if __name__ == '__main__':
 
             objects = PdfObjects(page, cache=cache)
             # objects = PdfObjects(page)
+
+            # for name, obj in objects:
+            #     if isinstance(obj, PdfDict):
+            #         print(name, '--', obj.Subtype)
+            # print('-'*60)
+            # sys.exit()
 
             images = {name+f'_{id(obj)}':obj for name, obj in objects 
                         if isinstance(obj, PdfDict) and obj.Subtype == PdfName.Image 
@@ -2126,7 +2187,7 @@ if __name__ == '__main__':
 
                 if options.interpolate:
                     PROCESSING_REQUESTED = True
-                    obj.Interpolate = PdfObject('true')
+                    obj.Interpolate = PdfObject('true') if options.interpolate == 'true' else PdfObject('false')
 
                 # ---------- Extract images ----------
                 if not PROCESSING_REQUESTED:
@@ -2155,9 +2216,10 @@ if __name__ == '__main__':
             if options.jpeg: suffix += f'-jpeg={options.quality}'
             if options.j2k: suffix += f'-j2k={options.quality}'
             if options.bitonal: suffix += '-bitonal'
-            if options.predictors: suffix += '-predictors'
+            if options.predictors: suffix += '-pred'
             if options.descreen: suffix += f'-descreen={options.descreen}'
-            if options.interpolate: suffix += f'-interpolate'
+            if options.interpolate == 'true': suffix += f'-interpolate'
+            if options.interpolate == 'false': suffix += f'-no-interpolate'
             assert suffix != ''
             pdfOutPath = fileBase + suffix + fileExt
             print(LINE_DOUBLE)

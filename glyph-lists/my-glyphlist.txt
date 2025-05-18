@@ -609,6 +609,49 @@ ia;044F
 io;0451
 # ============================================== CenturySchoolbook
 radicalex;203E
+# ============================================== PhoneticNewton
+ilong;006902D0
+oopenlong;025402D0
+ulong;007502D0
+alohg;006102D0
+ascriptlohg;025102D0
+vinverted;028C
+epsilonreversed;025C
+ash;00E6
+dyoghlig;0064021D
+yogh;021D
+dezhlig;02A4
+ezh;0292
+iundotted;0131
+jdotlessbarred;025F
+mturnedlongright;0270
+# vscript;????
+# --- marks
+lengthmark;02D0
+halflengthmark;02D1
+laminal;033B
+vertsrokesuperior;02C8
+vertstrokeinferior;02CC
+umlaut;0308
+umlautsubscript;0324
+underbar;0320
+underring;0325
+halfringleftsubscript;031C
+halfringrightsubscript;0339
+loweringsubscript;031E
+raisingsubscript;031D
+bridgesubscript;032A
+wedgesubscript;032C
+archsubscript;032F
+downstep;2193
+upstep;2191
+apostrophe;02BC
+subtilda;0330
+pipe;007C
+# --- sub- and super-scripts
+hsuperscript;02B0
+nsuperscript;207F
+wsuperscript;02B7
 # ============================================== Some more
 # 'hyphenminus' is, for some reason, not in (Adobe's) glyphlist.txt, there's only 'hyphen'
 hyphenminus;002D
@@ -992,6 +1035,7 @@ Zalt;2128
 # ============================================== stmary (from stmaryrd package)
 llbracket;27E6
 rrbracket;27E7
+binampersand;0026
 # ============================================== CharterITC
 v.var;0076
 i.othershort;0069

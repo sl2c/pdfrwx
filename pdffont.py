@@ -1891,7 +1891,11 @@ class PdfFontFile:
         except:
             warn(f'failed to parse Type1 font; salvaging Encoding')
             info['gid2gname'] = salvage_gid2gname(t1.data)
-            info['gname2width'] = {gname:0 for gname in t1.getGlyphSet()} # Can't do glyph.draw(), so no glyph.width
+            try:
+                info['gname2width'] = {gname:0 for gname in t1.getGlyphSet()} # Can't do glyph.draw(), so no glyph.width
+            except:
+                info['gname2width'] = {}
+                warn('failed to salvage Encoding')
             return info
 
 
@@ -1982,7 +1986,12 @@ class PdfFontFile:
 
         # Get font family, subfamily (normal/italic/bold/bolditalic) & full name
         # See: https://docs.microsoft.com/en-us/typography/opentype/spec/name
-        if name := ttFont.get('name'):
+        try:
+            name = ttFont.get('name')
+        except:
+            name = None
+        
+        if name:
 
             for record in name.names:
 
@@ -2068,7 +2077,11 @@ class PdfFontFile:
         except: glyphSet = None
 
         if glyphSet is not None:
-            gSet = PdfFontFile.distill_glyphSet(glyphSet)
+            try:
+                gSet = PdfFontFile.distill_glyphSet(glyphSet)
+            except:
+                warn(f'failed to obtain glyphSet: {fontName}')
+                gSet = {}
         else:
             try:
                 glyf = ttFont.get('glyf')
@@ -3491,7 +3504,7 @@ if __name__ == '__main__':
         # )
         font = PdfFont(pfb=file, encoding=None)
     elif ext == '.cff':
-        font = PdfFont(cff=file, force_CID=False)
+        font = PdfFont(cff=file)
     elif ext == '.ttf':
         font = PdfFont(ttf=file)
     elif ext == '.otf':
