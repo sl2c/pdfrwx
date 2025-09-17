@@ -7,8 +7,10 @@ from pdfrw import IndirectPdfDict, PdfArray, py23_diffs
 
 from .pdffilter import PdfFilter
 
-import numpy as np
+# !!!!! Try to remove the sci.py dependency later !!!!!
 from scipy.interpolate import interpn
+
+import numpy as np
 
 # ============================================================== timeit
 

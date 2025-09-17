@@ -445,10 +445,13 @@ class PdfStreamEditor:
         if firstCall: tree = self.tree
         
         # Editing options
+
         regex = options.get('regex', '')
         regexCheckPath = options.get('regexCheckPath', None)
         removeOCR = options.get('removeOCR', False)
         render = options.get('render', False)
+        removeAlt = options.get('removeAlt', False)
+
         edit = regex != '' or removeOCR
 
         # This is edited tree if options call for editing
@@ -525,6 +528,26 @@ class PdfStreamEditor:
                         if regexCheckPath != None:
                             with open(regexCheckPath, 'a') as file:
                                 file.write(btText + '\n')
+
+            # Process marked document content (for removing alternate text)
+            if cmd == 'BDC' and removeAlt:
+
+                assert len(leaf) == 2
+                assert len(args) == 2
+
+
+                altKeys = [PdfName.E, PdfName.Alt, PdfName.ActualText]
+                properties = args[1]
+
+                if any(k in altKeys for k in properties):
+
+                    text = '; '.join(properties[k] for k in properties if k in altKeys)
+                    properties = {k:properties[k] for k in properties if k not in altKeys}
+                    args[1] = properties
+                    outTree.append([cmd, args])
+                    self.isModified = True
+                    modified = True
+                    print('Removed Alt Text:', text)
 
             if not modified:
                 outTree.append(leaf)

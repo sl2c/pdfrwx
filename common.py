@@ -138,13 +138,18 @@ def pdfObjSize(obj:PdfObject, cache:set = set()):
                         items[name] = inherited
 
         for k,v in items.items():
-            # Do not traverse up the page tree or to other pages/XObject Forms/Images
-            subtypes = [PdfName.Form, PdfName.Image, PdfName.Type1, PdfName.MMType1, PdfName.TrueType, PdfName.Type3, PdfName.Type0]
-            if k == PdfName.Parent or isinstance(v,PdfDict) and (v.Type == PdfName.Page or v.Subtype in subtypes):
-                    s,o = 0,0
-            else: s,o = pdfObjSize(v, cache)
-            if isinstance(v,IndirectPdfDict): o += REF_OVERHEAD
-            size += s; overhead += len(k) + o + 2 # 2 separators
+            # Do not traverse up the page tree or to other pages' resources 
+            # (graphics states, images, XObject forms, shading dicts etc)
+            # subtypes = [PdfName.Form, PdfName.Image, PdfName.Type1, PdfName.MMType1, PdfName.TrueType, PdfName.Type3, PdfName.Type0]
+            if k in [PdfName.Parent, PdfName.Resources]:
+                # or isinstance(v,PdfDict) and (v.Type == PdfName.Page or v.Subtype in subtypes):
+                s,o = 0,0
+            else:
+                s,o = pdfObjSize(v, cache)
+            if isinstance(v,IndirectPdfDict):
+                o += REF_OVERHEAD
+            size += s
+            overhead += len(k) + o + 2 # 2 separators
     elif isinstance(obj,PdfArray):
         size,overhead = 0,ARRAY_OVERHEAD
         for v in obj:

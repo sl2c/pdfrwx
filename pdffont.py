@@ -640,17 +640,18 @@ class PdfFontGlyphMap:
 
         The usage scenario is to first run this function through all available glyph names
         to train the algorithm, and then call it on any particular glyph name to get results.
+
+        If decomposeXbb is False, 
         '''
         suffix_type = lambda suffix: self.DEX if all(c in string.digits for c in suffix) else self.HEX
 
-        # Abb is a double-struck A, not a composite glyph name!
-        if re.match(r'[a-zA-Z]b{2,}', gname): return None
+        # [A-Z]bb is a double-struck [A-Z], not a composite glyph name!
+        if re.match(r'[A-Z]b{2,}', gname): return None
 
-        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|cid|Char|char|glyph|MT|.*\.g)([0-9a-fA-F]{2,}|[0-9])$',r'\1|||\2',gname)
+        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|cid|Char|char|glyph|MT|.*\.g)([0-9a-fA-F]{2}|[0-9]{1,3})$',r'\1|||\2',gname)
         gname_split = re.split(r'\|\|\|',gname_marked)
         prefix,suffix = gname_split if len(gname_split) == 2 else (None,None)
         if prefix == None: return None
-
         suffix_t = suffix_type(suffix) if prefix != 'uni' else self.HEX
         if prefix not in self.prefix_types or suffix_t > self.prefix_types[prefix]:
             self.prefix_types[prefix] = suffix_t
@@ -687,9 +688,10 @@ class PdfFontGlyphMap:
                 try: result = int(gname[4:],16)
                 except: result = None
 
-        gname = PdfFontGlyphMap.strip_dot_endings(gname)
 
         if result is None:
+
+            gname = PdfFontGlyphMap.strip_dot_endings(gname)
 
             # When glyphs encode the corresponding Unicode points in their names
             if gname[:4] == '/uni':
@@ -720,7 +722,7 @@ class PdfFontGlyphMap:
             result = int(composite) if all(c in string.digits for c in composite) \
                 else ord(composite) if len(composite) == 1 \
                 else self.composite_gname_to_cc(composite)
-            
+
             if isinstance(result, int) and result > 0x110000:
                 result = None
 
@@ -737,7 +739,7 @@ class PdfFontGlyphMap:
 
         t3map1 = {c:i for i,c in enumerate('ABCDEFGH')}
         t3map2 = {c:i for i,c in enumerate('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ')}
-        # semicolons = {';':';', ';;':chr(0), ';;;;':chr(0), ';;;;;;;;':';'}
+        # semicolons = {';':ord(';'), ';;':0, ';;;;':ord(';'), ';;;;;;;;':0}
         semicolons = {';':0, ';;':ord(';'), ';;;;':0, ';;;;;;;;':ord(';')}
 
         if gname == '/BnZr':
@@ -745,6 +747,7 @@ class PdfFontGlyphMap:
         elif mapSemicolons and gname[1:] in semicolons:
             cc = semicolons[gname[1:]]
             warn(f'mapping {gname} --> {cc:04X}')
+            return cc
         elif len(gname) == 3:
             try: return t3map1[gname[1]] * 36 + t3map2[gname[2]]
             except: return None
@@ -1273,7 +1276,8 @@ class PdfFontCMap:
         '''
         self.unicode2cc = {}
         for k,v in self.cc2unicode.items():
-            if v not in self.unicode2cc: self.unicode2cc[v] = k
+            if v not in self.unicode2cc:
+                self.unicode2cc[v] = k
 
     # --------------------------------------------------------------------------- compose()
 
@@ -1530,7 +1534,7 @@ class PdfFontDictFunc:
         isSymbolic = (Flags & 4 == 4)
         isNonsymbolic = (Flags & 32 == 32)
         if isSymbolic  == isNonsymbolic:
-            raise ValueError(f'inconsistent Symbolic/nonSymbolic bits combo in font: {PdfFontDictFunc.get_font_name(font)}')
+            warn(f'inconsistent Symbolic/nonSymbolic bits combo in font: {PdfFontDictFunc.get_font_name(font)}')
 
         return isSymbolic
 
@@ -1542,6 +1546,7 @@ class PdfFontDictFunc:
         Returns font's name: `font.Name` for a Type3 font and `font.BaseFont` for all others.
         Note that a font may have no name, in which case `None` is returned.
         '''
+        assert isinstance(font, PdfDict)
         return font.Name if font.Subtype == '/Type3' else font.BaseFont
 
     # -------------------------------------------------------------------------------- get_font_descriptor()
@@ -1923,8 +1928,13 @@ class PdfFontFile:
                                 'Medium':100, 'NORMAL':100, 'Normal':100, 'Regular':100, 'regular':100,
                                 'Italic':100, 'Roman':100, 'Book':100,
                                 'Semibold':120, 'DemiBold':120, 'Demibold':120, 'Demi':120,
-                                'Bold':140, 'Bold Italic':140}
-            info['StemV'] = weight_to_stemv[weight]
+                                'Bold':140, 'Bold Italic':140,
+                                'BlackboardBold':180}
+            try:
+                info['StemV'] = weight_to_stemv[weight]
+            except:
+                warn(f'unknown font weight: {weight}; assuming stemv = 100')
+                info['StemV'] = 100
 
         # This initializes char.width-s
         CharStrings = t1.font["CharStrings"]
@@ -1995,13 +2005,18 @@ class PdfFontFile:
 
             for record in name.names:
 
-                if record.nameID == 1: info['FontFamily'] = record.toUnicode()
-                if record.nameID == 2: info['FontSubfamily'] = record.toUnicode()
-                if record.nameID == 4: info['FontName'] = record.toUnicode()
+                try: uni = record.toUnicode()
+                except:
+                    warn(f'failed to decode nameID = {record.nameID}')
+                    uni = 'FailedToDecode'
 
-                if record.nameID == 6 and 'FontName' not in info: info['FontName'] = record.toUnicode()
-                if record.nameID == 16 and 'FontFamily' not in info: info['FontFamily'] = record.toUnicode()
-                if record.nameID == 17 and 'FontSubfamily' not in info: info['FontSubfamily'] = record.toUnicode()
+                if record.nameID == 1: info['FontFamily'] = uni
+                if record.nameID == 2: info['FontSubfamily'] = uni
+                if record.nameID == 4: info['FontName'] = uni
+
+                if record.nameID == 6 and 'FontName' not in info: info['FontName'] = uni
+                if record.nameID == 16 and 'FontFamily' not in info: info['FontFamily'] = uni
+                if record.nameID == 17 and 'FontSubfamily' not in info: info['FontSubfamily'] = uni
 
             if 'FontName' not in info and 'FontFamily' in info and 'FontSubfamily' in info:
                 info['FontName'] = info['FontFamily'] + '-' + info['FontSubfamily']
@@ -2037,7 +2052,9 @@ class PdfFontFile:
             warn(f'no head table: {fontName}')
 
         # OS2
-        if os2 := ttFont.get('OS/2'):
+        try: os2 = ttFont.get('OS/2')
+        except: os2 = None
+        if os2:
             info['Ascent']      = int(z*os2.sTypoAscender)
             info['Descent']     = int(z*os2.sTypoDescender)
             # info['CapHeight']   = int(z*os2.sCapHeight)
@@ -2054,14 +2071,19 @@ class PdfFontFile:
             info['isSerif']         = os2.panose.bFamilyType == 2 and os2.panose.bSerifStyle
             info['isScript']        = os2.panose.bFamilyType == 3
 
-        elif hhea := ttFont.get('hhea'):
+        hhea = None
+        if os2 is None:
+            try: hhea = ttFont.get('hhea')
+            except: hhea = None
+        
+        if hhea:
 
             info['Ascent']      = int(z*hhea.ascent)
             info['Descent']     = int(z*hhea.descent)
             info['CapHeight']   = int(z*hhea.ascent)
             info['StemV']       = 100
 
-        else:
+        if os2 is None and hhea is None:
             warn(f'no OS/2 or hhea table: {fontName}')
 
         # Stylistic parameters
@@ -2891,7 +2913,7 @@ class PdfFont:
         character codes to creates to Unicode points. Returns a tuple `(CMap, unrecognized)`,
         where `CMap` is an instance of `PdfFontCMap`, and `uncrecognized` is a list of unrecognized glyph names.
 
-        The mapping a glyph name from `self.cc2g.values()` can proceed in either of the following paths:
+        The mapping of a glyph name from `self.cc2g.values()` can proceed in either of the following paths:
         
         1) the glyph name is a `known` glyph name (as per one of the available so-called `glyph lists` likes
         Adobe Glyph List, e.g.), in which case it is mapped directly to a Unicode point;
@@ -2939,8 +2961,8 @@ class PdfFont:
             if code := baseInvMap.get(gname):
                 code = ord(code)
 
-            elif explicitMap.get(gname):
-                code = explicitMap[gname]
+            elif code := explicitMap.get(gname):
+                pass
 
             else:
                 # This returns either int or str

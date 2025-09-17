@@ -111,7 +111,7 @@ class PdfState:
             cs.fontName = re.sub(r'#20',' ', cs.fontName) # !!! DEAL WITH THE CODE IN LITERAL NAMES; Pdf. Ref. sec. 3.2.4
             res = self.resources
             cs.font = res.Font[cs.fontName]
-            if cs.font == None: raise ValueError(f'font {cs.fontName} not in not in resources.Font: {res.Font}')
+            if cs.font == None: raise ValueError(f'font {cs.fontName} not in not in resources.Font: {res.Font.keys()}')
             fontId = id(cs.font)
             # warn(f'cs.font: {cs.font}, {cs.fontName} -> {res.Font}')
             if fontId in self.__fontCache:
