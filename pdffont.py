@@ -12,7 +12,7 @@ except:
 from pdfrwx.common import err, warn, msg, getExecPath
 from pdfrwx.pdffilter import PdfFilter
 from pdfrwx.pdfgeometry import VEC, MAT, BOX
-from pdfrwx.pdfobjects import PdfObjects
+from pdfrwx.pdfobjects import PdfObjects, pdfObjSize
 
 # fontLib
 try:
@@ -144,19 +144,44 @@ class PdfTextString(str):
     # --------------------------------------------------------------------------- to_codes()
 
     def to_codes(self, isCID = False):
-        return self.to_bytes().decode('utf-16-be' if isCID else 'latin1')
+        '''
+        Converts a `PdfTextString` to a codes string.
+        '''
+        return PdfTextString.bytes_to_codes(self.to_bytes(), isCID=isCID)
+        
+    # --------------------------------------------------------------------------- bytes_to_codes()
+
+    @staticmethod
+    def bytes_to_codes(b:bytes, isCID = False):
+        '''
+        Converts a bytes string to a codes string
+        '''
+        if isCID:
+            assert len(b) % 2 == 0
+            return ''.join(chr(i) for i in struct.unpack('>' + 'H' * (len(b) // 2), b))
+        else:
+            return b.decode('latin1')
+
 
     # --------------------------------------------------------------------------- from_codes()
 
     @classmethod
     def from_codes(cls, codeString:str, format:str = 'auto', forceCID = False):
+        '''
+        Creates a `PdfTextString` from a codes string.
+        '''
         if format not in ['auto', 'hex', 'literal']:
             raise ValueError(f'format should be one of: auto, hex, literal')
+        assert not any(ord(c) > 65535 for c in codeString)
         isCID = any(ord(c)>255 for c in codeString) or forceCID
         suitableFormat = 'hex' if isCID else 'literal'
         format = format if format != 'auto' else suitableFormat # Do not let from_bytes() decide on the format
-        bytes = codeString.encode('utf-16-be' if isCID else 'latin1')
-        return cls.from_bytes(bytes, bytes_encoding=format)
+        if isCID:
+            lst = [ord(c) for c in codeString]
+            b = struct.pack('>' + 'H' * len(lst), *lst)
+        else:
+            b = codeString.encode('latin1')
+        return cls.from_bytes(b, bytes_encoding=format)
 
     # --------------------------------------------------------------------------- to_bytes()
 
@@ -224,10 +249,12 @@ class PdfTextString(str):
         '''
         # try: return bytes.fromhex(hexStr).decode('utf-16-be') if len(hexStr) >= 4 else chr(int(hexStr,16))
         # except: return None
+        hexStr = hexStr.replace(' ', '')
+        if len(hexStr) < 4:
+            hexStr = '0'*(4-len(hexStr)) + hexStr
+
         try: return bytes.fromhex(hexStr).decode('utf-16-be')
-        except:
-            try: return chr(int(hexStr,16))
-            except: return None
+        except: return None
 
     # --------------------------------------------------------------------------- Unicode_to_UTF16BE()
 
@@ -648,7 +675,7 @@ class PdfFontGlyphMap:
         # [A-Z]bb is a double-struck [A-Z], not a composite glyph name!
         if re.match(r'[A-Z]b{2,}', gname): return None
 
-        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|cid|Char|char|glyph|MT|.*\.g)([0-9a-fA-F]{2}|[0-9]{1,3})$',r'\1|||\2',gname)
+        gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|cid|Char|char|glyph|MT|.*\.g)([0-9a-fA-F]{2}|[0-9]+)$',r'\1|||\2',gname)
         gname_split = re.split(r'\|\|\|',gname_marked)
         prefix,suffix = gname_split if len(gname_split) == 2 else (None,None)
         if prefix == None: return None
@@ -1019,23 +1046,60 @@ class PdfFontCMap:
             isHex,isValueList = False,False
             rangeList,valueList = [],[]
 
-            for t in tokens:
-                if t == '<': isHex = True
-                elif t == '>': isHex = False
-                elif t == '[': isValueList = True
-                elif t == ']': isValueList = False; rangeList.append(valueList); valueList = []
-                elif isHex:
-                    u = PdfTextString.UTF16BE_to_Unicode(t)
-                    if u == None:
-                        warn(f'bad token in ToUnicode CMap: {t}')
-                    if isValueList:
-                        valueList.append(u if u != None else chr(0))
-                    else:
-                        rangeList.append(u if u != None else chr(0))
+            pos = 0
 
-            if len(rangeList) % 3 != 0: err(f'bfrange: not a whole number of triplets in a bfrange block: {block}')
+            for t in tokens:
+
+                if t == '<':
+                    assert not isHex
+                    isHex = True
+                elif t == '>':
+                    assert isHex
+                    isHex = False
+                    if not isValueList:
+                        pos += 1
+                elif t == '[':
+                    assert not isHex  and not isValueList
+                    isValueList = True
+                elif t == ']':
+                    assert not isHex and isValueList
+                    isValueList = False
+                    rangeList.append(valueList)
+                    valueList = []
+                    pos += 1
+                elif isHex:
+                    if pos % 3 != 2:
+                        try:
+                            u = chr(int(t, base=16))
+                        except:
+                            warn(f'bad code point in ToUnicode CMap: {t}')
+                            u = None
+                    else:
+                        u = PdfTextString.UTF16BE_to_Unicode(t)
+
+                        if u == None:
+                            warn(f'bad Unicode value in ToUnicode CMap: {t}')
+                        
+                    if isValueList:
+                        valueList.append(u)
+                    else:
+                        rangeList.append(u)
+
+            if pos != len(rangeList):
+                raise ValueError(f"rangeList pos/len error: {pos}, {len(rangeList)}")
+            if len(rangeList) % 3 != 0:
+                ValueError(f'bfrange: not a whole number of triplets in a bfrange block: {block}')
+
+            rList = []
+            for n in range(0, len(rangeList), 3):
+                triplet = rangeList[n:n+3]
+                if None in triplet or (isinstance(triplet[2], list) and None in triplet[2]):
+                    continue
+                rList += triplet
+            rangeList = rList
+
  
-            # Increment last char of a string (sames as incrementing the last byte, but faster; see PDF Ref. 1.7 p. 474)
+            # Increment last char of a string (same as incrementing the last byte, but faster; see PDF Ref. 1.7 p. 474)
             INCREMENT = lambda s,i: chr(ord(s)+i) if len(s) == 1 \
                             else (s[:-1] + chr(ord(s[-1]) + i)) if ord(s[-1])//256 == (ord(s[-1]) + i)//256 \
                             else None
@@ -1065,16 +1129,41 @@ class PdfFontCMap:
             isHex = False
             charList = []
 
+            pos = 0
             for t in tokens:
-                if t == '<': isHex = True
-                elif t == '>': isHex = False
+                if t == '<':
+                    assert not isHex
+                    isHex = True
+                elif t == '>':
+                    assert isHex
+                    isHex = False
+                    pos += 1
                 elif isHex:
-                    u = PdfTextString.UTF16BE_to_Unicode(t)
-                    # if u == None: u = chr(0) # This is a quick and dirty fix for errors in existing ToUnicode CMaps
-                    if u == None: warn('bad token in ToUnicode CMap: ' + t) 
-                    charList.append(u if u != None else chr(0))
+                    if pos % 2 == 0:
+                        try:
+                            u = chr(int(t, base=16))
+                        except:
+                            warn(f'bad code point in ToUnicode CMap: {t}')
+                            u = None
 
-            if len(charList) % 2 != 0: err(f'bfchar: not a whole number of pairs in a bfchar block: {block}')
+                    else:
+                        u = PdfTextString.UTF16BE_to_Unicode(t)
+                        if u == None:
+                            warn(f'bad Unicode value in ToUnicode CMap: {t}')
+
+                    charList.append(u)
+
+            if pos != len(charList):
+                raise ValueError(f"charList pos/len error: {pos}, {len(charList)}")
+            if len(charList) % 2 != 0:
+                raise ValueError(f'bfchar: not a whole number of pairs in a bfchar block: {block}')
+
+            cList = []
+            for n in range(0, len(charList), 2):
+                doublet = charList[n:n+2]
+                if None not in doublet:
+                    cList += doublet
+            charList = cList
 
             for i in range(0,len(charList),2):
                 start,u = charList[i:i+2]
@@ -1457,9 +1546,13 @@ class PdfFontCMap:
 
         If such offset does not exist returns None.
         '''
-        if len(listOfStrings) == 0: return None
-        offset = (ord(next(iter(listOfStrings))) >> 8) << 8
-        return offset if all(len(u) == 1 and offset <= ord(u) <= offset+255 for u in listOfStrings) else None
+        chars = listOfStrings
+        if len(chars) == 0:
+            return None
+        if not all(len(c) == 1 for c in chars):
+            return None
+        offset = (ord(next(iter(chars))) >> 8) << 8
+        return offset if all(offset <= ord(c) <= offset+255 for c in chars) else None
 
 # ================================================== class PdfFontDictFunc
 
@@ -3143,7 +3236,11 @@ class PdfFont:
         Encodes a text string as a PdfTextString; this actually produces a PDF hex/literal string
         depending on the value of self.is_cid().
         '''
-        return PdfTextString.from_codes(self.cmap.encode(s), forceCID=self.is_cid())
+        codeString = self.cmap.encode(s)
+        if codeString is None:
+            warn(f'{self}: failed to encode string: {s}')
+            return None
+        return PdfTextString.from_codes(codeString, forceCID=self.is_cid())
 
     # -------------------------------------------------------------------------------- width()
 
@@ -3351,7 +3448,11 @@ class PdfFont:
             ttfCMaps = ' '.join(k[4:] for k in self.info if re.match('cmap', k))
             if len(ttfCMaps) > 0: ttfCMaps = ', CMaps: '+ttfCMaps
 
-            subtitle = f'{subtype}, {encoding}{ttfCMaps}{ToUnicode}{Embedded}{CharProcs}{Symbolic}'
+            program = PdfFontDictFunc.get_font_descriptor(self.font) or self.font.CharProcs
+            fs = pdfObjSize(program)
+            FileSize=f', {sum(fs)} bytes'
+
+            subtitle = f'{subtype}, {encoding}{ttfCMaps}{ToUnicode}{Embedded}{CharProcs}{Symbolic}{FileSize}'
 
             stream  = f'1 0 0 1 40 320 cm BT\n'
             stream += f'1 0 0 1 -10 40 Tm /C 10 Tf ({title}) Tj\n'

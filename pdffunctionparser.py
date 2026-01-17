@@ -5,7 +5,7 @@ from sly import Lexer, Parser
 
 from pdfrw import IndirectPdfDict, PdfArray, py23_diffs
 
-from .pdffilter import PdfFilter
+from pdfrwx.pdffilter import PdfFilter
 
 # !!!!! Try to remove the sci.py dependency later !!!!!
 from scipy.interpolate import interpn
@@ -377,31 +377,27 @@ class PdfFunction:
         and should thus have shape (self.M, image_shape).
         The returned stack has shape (self.N, image_shape).
         '''
-        s = stack
+        # s = stack
+        M,H,W = stack.shape
+        s = []
+        for i in range(M):
+            s.append(stack[i])
+ 
         tree = self.tree
 
-        FALSE = np.zeros_like(stack[0],dtype=int)
-        TRUE = -np.ones_like(stack[0],dtype=int)
+        FALSE = np.zeros_like(s[0],dtype=int)
+        TRUE = -np.ones_like(s[0],dtype=int)
+
+        ONES = np.ones_like(s[0], dtype=int)
 
         BOOL = lambda a: np.logical_not(np.isclose(a,0))
         INT = lambda a: np.rint(a).astype(int)
         # FLOAT = lambda a: a.astype(float)
 
-        # These functions modify the s variable
-        def PUSH(s,v):
-            return np.vstack((s, [v]))
-        def PUSH_CONST(s, c):
-            return np.pad(s, pad_width = ((0,1),(0,0),(0,0)), constant_values = ((0,c),(0,0),(0,0)))
-            # v = np.array([np.ones_like(s[0])*c])
-            # timeit('v created')
-            # return np.r_[s, v]
         def MOD(s,func):
-            s[:-1] = func(s[:-1])
+            s[-1] = func(s[-1])
 
-        def print_stack(s):
-            return '[' + ', '.join(f'{np.mean(s[i]):.3f}'.rstrip('0').rstrip('.') for i in range(s.shape[0])) + ']'
-
-        print(f'Executing function type 4 [stack.shape={s.shape}]:', end=' ')
+        print(f'Executing function type 4 [stack.shape={[M,H,W]}]:', end=' ')
         sys.stdout.flush()
 
         for leaf in tree:
@@ -418,10 +414,12 @@ class PdfFunction:
 
                 # Calculate the Universes
                 if 'if' in leaf:
+                    raise ValueError(f'PDF type4 function command not implemented: {leaf}')
                     proc = leaf['if']
                     s1 = PdfFunction.execute(proc, s)
                     s2 = s
                 elif 'ifelse' in leaf:
+                    raise ValueError(f'PDF type4 function command not implemented: {leaf}')
                     proc1, proc2 = leaf['ifelse']
                     s1 = PdfFunction.execute(proc1, s)
                     s2 = PdfFunction.execute(proc2, s)
@@ -440,47 +438,109 @@ class PdfFunction:
 
             # Ints and floats
             elif isinstance(leaf,float) or isinstance(leaf,int):
-                s = PUSH_CONST(s, leaf)
+                s.append(ONES * leaf)
 
             # Boolean literals
-            elif leaf == 'false': s=PUSH_CONST(s,0)
-            elif leaf == 'true': s=PUSH_CONST(s,-1)
+            elif leaf == 'false': s.append(FALSE)
+            elif leaf == 'true': s.append(TRUE)
 
             # Boolean 1-argument operators
             elif leaf == 'not': s[-1] = np.bitwise_xor(INT(s[-1]), TRUE)
 
             # Stack manipulation
-            elif leaf == 'pop': s = s[:-1]
-            elif leaf == 'exch': s[[-1,-2]] = s[[-2,-1]]
-            elif leaf == 'dup': s=PUSH(s,s[-1])
+            elif leaf == 'pop': s.pop()
+            elif leaf == 'exch': tmp = s[-1]; s[-1] = s[-2]; s[-2] = tmp
+            elif leaf == 'dup': s.append(s[-1])
             elif leaf in ['copy']:
                 raise ValueError(f'PDF type4 function command not implemented: {leaf}')
 
             elif leaf == 'index':
-                s, n = s[:-1], np.rint(s[-1]).astype('int8')
-                idx1 = np.arange(s.shape[1])[:, np.newaxis]
-                idx2 = np.arange(s.shape[2])[np.newaxis, :]
-                sn = s[-n-1, idx1, idx2]
-                s = PUSH(s, sn)
+
+                idx = np.rint(s.pop()).astype(np.int8)
+
+                # Short-cut for uniform idx
+                idx0 = idx.flat[0]
+                if np.all(idx == idx0):
+
+                    s.append(s[len(s) - 1 - idx0])
+
+                else:
+
+                    out = np.full(s[0].shape, np.nan, dtype=s[0].dtype)
+
+                    abs_idx = len(s) - 1 - idx
+                    # Can be optimized further by limiting range of i
+                    for i, arr in enumerate(s):
+                        np.copyto(out, arr, where=(abs_idx == i))
+
+                    s.append(out)
 
             elif leaf == 'roll':
-                s, j = s[:-1], np.rint(s[-1]).astype('int8') # roll shift
-                s, n = s[:-1], np.rint(s[-1]).astype('int8') # roll region size
-                n_max = np.max(n)
-                s_slice = s[-n_max:,...] # work with the slice to speed things up a bit
-                idx0 = np.arange(s_slice.shape[0])[:, np.newaxis, np.newaxis]
-                idx1 = np.arange(s_slice.shape[1])[np.newaxis, :, np.newaxis]
-                idx2 = np.arange(s_slice.shape[2])[np.newaxis, np.newaxis, :]
-                start = n_max - n
 
-                # # Ver. 1
-                # idx0_rolled = np.where(idx0 < start, idx0, start + (idx0 - start - j) % n)
-                # s_slice[...] = s_slice[idx0_rolled, idx1, idx2]
+                j = np.rint(s.pop()).astype(np.int8)
+                n = np.rint(s.pop()).astype(np.int8)
 
-                # Ver. 2 (slightly faster)
-                idx0_rolled = np.where(idx0 < start, idx0, start + (idx0 - start + j) % n)
-                # need a copy: https://github.com/numpy/numpy/issues/26542
-                s_slice[idx0_rolled, idx1, idx2] = np.copy(s_slice)
+                depth = len(s)
+                H, W = n.shape
+
+                # Max number of elements possibly rolled
+                n_max = min(depth, int(np.max(n)))
+
+                if n_max > 1:
+
+                    # Short-cut for uniform j and n arrays
+                    n0, j0 = n.flat[0], j.flat[0]
+                    if np.all(n == n0) and np.all(j == j0):
+
+                        k = j0 % n0
+                        s[-n0:] = s[-k:] + s[-n0:-k]
+
+                    else:
+
+                        # Slice of stack involved in roll
+                        base = depth - n_max
+                        slice_arrays = s[base:]
+
+                        # Preallocate result buffers
+                        result = [arr.copy() for arr in slice_arrays]
+
+                        # For each slot in the rolled region
+                        for dst in range(n_max):
+
+                            # Only pixels where dst < n participate
+                            active = dst < n
+
+                            # For this destination slot, compute source slot per pixel
+                            src = np.zeros_like(j)
+                            np.add(dst, j, out=src, where=active)
+                            np.remainder(src, n, out=src, where=active) # note that pixels with n == 0 are not active
+
+                            # Fill from appropriate source arrays
+                            for x in range(1):
+                                for i in range(n_max):
+                                    sel = active & (src == i)
+                                    np.copyto(result[n_max - dst - 1], slice_arrays[n_max - i - 1], where=sel)
+
+                        # Write back
+                        s[base:] = result
+
+                # s, j = s[:-1], np.rint(s[-1]).astype('int8') # roll shift
+                # s, n = s[:-1], np.rint(s[-1]).astype('int8') # roll region size
+                # n_max = np.max(n)
+                # s_slice = s[-n_max:,...] # work with the slice to speed things up a bit
+                # idx0 = np.arange(s_slice.shape[0])[:, np.newaxis, np.newaxis]
+                # idx1 = np.arange(s_slice.shape[1])[np.newaxis, :, np.newaxis]
+                # idx2 = np.arange(s_slice.shape[2])[np.newaxis, np.newaxis, :]
+                # start = n_max - n
+
+                # # # Ver. 1
+                # # idx0_rolled = np.where(idx0 < start, idx0, start + (idx0 - start - j) % n)
+                # # s_slice[...] = s_slice[idx0_rolled, idx1, idx2]
+
+                # # Ver. 2 (slightly faster)
+                # idx0_rolled = np.where(idx0 < start, idx0, start + (idx0 - start + j) % n)
+                # # need a copy: https://github.com/numpy/numpy/issues/26542
+                # s_slice[idx0_rolled, idx1, idx2] = np.copy(s_slice)
 
             # Math: 1-argument operators
             elif leaf == 'abs': MOD(s,np.absolute)
@@ -502,25 +562,26 @@ class PdfFunction:
                         'idiv','mod',
                         'and','or','xor',
                         'eq','ne','lt','gt','le','ge']:
-                x,y = s[-2], s[-1]
+                y = s.pop()
+                x = s.pop()
 
                 # Math: 2-argument operators
 
-                if leaf == 'add': s[-2] = x + y
-                elif leaf == 'sub': s[-2] = x - y
-                elif leaf == 'mul': s[-2] = x * y
-                elif leaf == 'div': s[-2] = x / y
-                elif leaf == 'exp': s[-2] = x ** y
-                elif leaf == 'atan': s[-2] = np.atan2(x,y)
+                if leaf == 'add': r = x + y
+                elif leaf == 'sub': r = x - y
+                elif leaf == 'mul': r = x * y
+                elif leaf == 'div': r = x / y
+                elif leaf == 'exp': r = x ** y
+                elif leaf == 'atan': r = np.atan2(x,y)
 
-                elif leaf == 'idiv': s[-2] = np.trunc(INT(x)/INT(y))
-                elif leaf == 'mod': s[-2] = np.sign(x) * (np.abs(INT(x)) % np.abs(INT(y)))
+                elif leaf == 'idiv': r = np.trunc(INT(x)/INT(y))
+                elif leaf == 'mod': r = np.sign(x) * (np.abs(INT(x)) % np.abs(INT(y)))
 
                 # Boolean: 2-argument operators
 
-                elif leaf == 'and': s[-2] = np.bitwise_and(INT(x),INT(y))
-                elif leaf == 'or': s[-2] = np.bitwise_or(INT(x),INT(y))
-                elif leaf == 'xor': s[-2] = np.bitwise_xor(INT(x),INT(y))
+                elif leaf == 'and': r = np.bitwise_and(INT(x),INT(y))
+                elif leaf == 'or': r = np.bitwise_or(INT(x),INT(y))
+                elif leaf == 'xor': r = np.bitwise_xor(INT(x),INT(y))
 
                 elif leaf in ['eq','ne','lt','gt','le','ge']:
                     # Using CLOSE/NOT_CLOSE in place of equal/not equal b/c we represent ints as floats
@@ -532,19 +593,21 @@ class PdfFunction:
                     elif leaf == 'gt': mask = np.logical_and(x > y, NOT_CLOSE)
                     elif leaf == 'le': mask = np.logical_or(x < y, CLOSE)
                     elif leaf == 'ge': mask = np.logical_or(x > y, CLOSE)
-                    s[-2] = FALSE
-                    s[-2,mask] = TRUE[mask]
+                    r = np.where(mask, TRUE, FALSE)
                 else:
                     raise ValueError('internal error')
 
                 # Final pop
-                s = s[:-1]
+                s.append(r)
 
             else:
                 raise ValueError(f'bad leaf: {leaf} in tree: {tree}')
 
             # timeit(f'{leaf}\t--> {print_stack(s)}')
             # timeit(f'{leaf} --> stack size: {s.shape[0]}')
+
+        # Turn list back to numpy array
+        s = np.stack(s, axis = 0)
 
         print()
         print(f'Function type 4 successfully executed [stack.shape={s.shape}]')

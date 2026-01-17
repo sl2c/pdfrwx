@@ -14,11 +14,38 @@ from .common import warn, get_key, encapsulate, decapsulate
 
 class PdfFilter:
 
+    FILTER_NAMES = {
+        '/ASCIIHexDecode':'AHx',
+        '/AHx':'AHx',
+        '/ASCII85Decode':'A85',
+        '/A85':'A85',
+        '/FlateDecode':'ZIP',
+        '/Fl':'ZIP',
+        '/LZWDecode':'LZW',
+        '/LZW':'LZW',
+        '/RunLengthDecode':'RLE',
+        '/RL':'RLE',
+        '/DCTDecode':'JPEG',
+        '/CCITTFaxDecode':'FAX',
+        '/JBIG2Decode':'JB2',
+        '/JPXDecode':'JPX',
+        'null':'None',
+        None:'None'
+    }
+
+    # -------------------------------------------------------------------- filters_as_list()
+
+    @staticmethod
+    def filters_as_list(obj:IndirectPdfDict):
+        '''
+        Returns `obj.Filter` as a list of short filter names; see PdfFilter.FILTER_NAMES.
+        '''
+        return [PdfFilter.FILTER_NAMES.get(f, f[1:]) for f in encapsulate(obj.Filter)]
+
     # -------------------------------------------------------------------- uncompress()
 
     @staticmethod
     def uncompress(obj:IndirectPdfDict,
-                   fixPngPredictors:bool = False,
                    fixFlateStreams:bool = False):
         '''
         Returns an uncompressed version of `obj`. Supports objects compressed with one or more of the following filters:
@@ -29,14 +56,6 @@ class PdfFilter:
 
         Normally, the function does not modify the `obj` itself. However
 
-        * If `fixPngPredictors` is `True`, for all filters that use PNG predictors (PDF Ref. p. 76),
-        the function will set the value of the `/Predictor` parameter to 15:
-        the actual value of the predictor parameter doesn't matter, according the PDF Ref.,
-        as long as it is in the PNG predictors range (10..15).
-        Setting it to 15 prevents errors in some PDF viewers that erroneously
-        base assumptions about the actual predictor values used in the stream on the value of
-        the `/Predictor` entry.
-
         * The function is able to uncompress `/FlateDecode` streams that use RFC1950 (deflate)
         algorithm, which is different from the more well-known RFC1951 (zlib) algorithm.
         For such RFC1950 streams it successfully returns the result.
@@ -44,7 +63,6 @@ class PdfFilter:
         turning it into an RFC1951 (zlib) stream
         (together with updating other `obj` entries: `/Filters`, `/DecodeParms`, `/Length`).
 
-        These two function arguments can therefore be used to fix existing issues with the PDF dictionaries.
         '''
         assert isinstance(obj, PdfDict)
         stream = obj.stream
@@ -128,15 +146,7 @@ class PdfFilter:
                                                             columns = columns,
                                                             colors = colors,
                                                             bpc = bpc)
-                    
-
-                    # Fix PNG Predictor value: set it to 15 (fixes Multivalent bug)
-                    # its actual value doesn't matter: PDF Ref. Sec. 3.3.3
-                    if fixPngPredictors and predictor != 15:
-                        parms[f].Predictor = 15
-                        obj.DecodeParms = decapsulate(parms)
-                        warn(f'fixed PNG predictor: {predictor} --> 15')
-                 
+                                     
                 elif predictor == 2: # TIFF Predictor 2 filter
 
                     array = PdfFilter.unpack_pixels(stream=stream, width=columns, cpp=colors, bpc=bpc)
@@ -350,45 +360,62 @@ class PdfFilter:
     @staticmethod
     def rle_decode(string:bytes):
         # PDF Ref. 1.7 Sec. 3.3.4
-        s = b''
-        i = 0
-        while i < len(string):
-            runLength = string[i]
-            if runLength == 128: break
-            elif 0 <= runLength < 128:
-                j = (i + 1) + (runLength + 1)
-                s += string[i+1:j]
-                i = j
+        result = []
+        read = 0
+        repeat = 0
+        for b in string:
+            if read > 0:
+                result.append(b)
+                read -= 1
+            elif repeat > 0:
+                result += [b]*repeat
+                repeat = 0
+            elif b == 128:
+                break
+            elif 0 <= b <= 127:
+                read = b + 1
             else:
-                s += string[i+1].to_bytes(1,'big') * (257 - runLength)
-                i += 2
-        return s
+                repeat = 257 - b
+        return bytes(result)
 
     # -------------------------------------------------------------------- rle_encode()
 
     @staticmethod
     def rle_encode(string:bytes):
         # PDF Ref. 1.7 Sec. 3.3.4
-        i,j,N = 0,1,len(string)
         MAX_SEQ_LENGTH = 128
 
-        runs = []
-        while i<N:
-            while j<N and string[j] == string[i] and j-i < MAX_SEQ_LENGTH: j += 1
-            runs.append((string[i],j-i))
-            i,j = j,j+1
+        if len(string) == 0:
+            return b''
 
-        seq = b''
-        result = b''
+        # Convert a string to a list of runs
+        runs = []
+        b_prev = string[0]
+        runLength = 0
+        for b in string:
+            if b == b_prev and runLength < MAX_SEQ_LENGTH:
+                runLength += 1
+            else:
+                runs.append((b_prev, runLength))
+                b_prev = b
+                runLength = 1
+        runs.append((b_prev, runLength))
+ 
+        # Optimize and encode the list of runs
+        seq = []
+        result = []
         for char, runLength in runs:
             if len(seq) + runLength <= MAX_SEQ_LENGTH and (len(seq) == 0 and runLength < 2 or runLength < 3):
-                seq += bytes([char]) * runLength
+                seq += [char] * runLength
             else:
-                if len(seq)>0: result += bytes([len(seq)-1]) + seq; seq = b''
-                result += bytes([257 - runLength, char])
-        if len(seq)>0: result += bytes([len(seq)-1]) + seq
+                if len(seq)>0:
+                    result += [len(seq)-1] + seq
+                    seq = []
+                result += [257 - runLength, char]
+        if len(seq)>0:
+            result += [len(seq)-1] + seq
 
-        return result
+        return bytes(result)
     
  
     # -------------------------------------------------------------------- lzw_decode()

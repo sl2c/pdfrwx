@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-import inspect,sys,os
+import inspect,sys,os,re
+from itertools import groupby
 
 from pdfrw import PdfArray, PdfDict, IndirectPdfDict, PdfObject, PdfName
 from .pdfgeometry import BOX
@@ -100,69 +101,7 @@ def chain(a:dict, b:dict):
     '''
     return {k:b.get(v,v) for k,v in a.items()}
 
-
-# ========================================================================== PdfObjSize()
-
-def pdfObjSize(obj:PdfObject, cache:set = set()):
-    '''
-    Returns (size, overhead), where size is the size of the streams of obj and all other
-    dictionaries that the obj references, and overhead is (the estimate of) the corresponding size
-    of their headers (the dictionaries per se). If cache dict is supplied, it is used to
-    eliminate double-counting of dictionaries and arrays.
-    '''
-
-    # if cache != None and (isinstance(obj,PdfDict) or isinstance(obj,PdfArray)):
-    # if cache != None:
-    if id(obj) in cache: return 0, 0
-    cache.add(id(obj))
-
-    REF_OVERHEAD = 8 # a typical '123 0 R ' reference length
-    DICT_OVERHEAD = 5 # '<<>> '
-    ARRAY_OVERHEAD = 3 # '[] '
-
-    if isinstance(obj, PdfDict):
-        size = int(obj.Length) if obj.Length != None else 0
-        overhead = DICT_OVERHEAD
-
-        if obj.Subtype == PdfName.Form:
-            return size, overhead
-
-        # Inherit page items
-        INHERITABLE = [PdfName.Resources, PdfName.Rotate, PdfName.MediaBox, PdfName.CropBox]
-        items = {k:v for k,v in obj.items()}
-        if obj.Type == PdfName.Page:
-            for name in INHERITABLE:
-                if name not in items:
-                    inherited = obj.inheritable[name]
-                    if inherited != None:
-                        items[name] = inherited
-
-        for k,v in items.items():
-            # Do not traverse up the page tree or to other pages' resources 
-            # (graphics states, images, XObject forms, shading dicts etc)
-            # subtypes = [PdfName.Form, PdfName.Image, PdfName.Type1, PdfName.MMType1, PdfName.TrueType, PdfName.Type3, PdfName.Type0]
-            if k in [PdfName.Parent, PdfName.Resources]:
-                # or isinstance(v,PdfDict) and (v.Type == PdfName.Page or v.Subtype in subtypes):
-                s,o = 0,0
-            else:
-                s,o = pdfObjSize(v, cache)
-            if isinstance(v,IndirectPdfDict):
-                o += REF_OVERHEAD
-            size += s
-            overhead += len(k) + o + 2 # 2 separators
-    elif isinstance(obj,PdfArray):
-        size,overhead = 0,ARRAY_OVERHEAD
-        for v in obj:
-            # Do not traverse to other pages
-            if isinstance(v,PdfDict) and v.Type == PdfName.Page: s,o = 0,0
-            else: s,o = pdfObjSize(v, cache)
-            if isinstance(v,IndirectPdfDict): o += REF_OVERHEAD
-            size += s; overhead += o + 1 # 1 separator
-    else:
-        size,overhead = 0, len(str(obj))
-
-    return size, overhead
-
+# ========================================================================== System utilities
 
 def getExecPath():
     '''
@@ -170,3 +109,43 @@ def getExecPath():
     '''
     return os.path.dirname(__file__)
 
+# ========================================================================== Input/output
+
+def formatSize(size:float, unit:str = '', kilo:int = 1024):
+    '''
+    Size formatting: `formatSize(1024, 'K')` returns '1M'.
+    '''
+    nextUnit = {'':'K','K':'M','M':'G','G':'T'}
+    factor = lambda size: 10 if size < 10 else 1
+    truncate = lambda size: f'{round(size*factor(size))/factor(size):.2f}'.rstrip('0').rstrip('.')
+    return f'{truncate(size)}{unit}' if size < kilo or unit not in nextUnit else formatSize(size/kilo, nextUnit[unit])
+
+def formatWithCommas(size:int):
+    '''
+    Call `formatWithCommas(12345) to get '12,345'`
+    '''
+    assert isinstance(size, int)
+    s = f'{size}'
+    s = ' '*(-len(s) % 3) + s
+    s = ','.join(s[i:i+3] for i in range(0,len(s),3))
+    return s.lstrip()
+
+def listToRangesString(lst:list[int]):
+    '''
+    Converts a list of ints such as [1,2,3,6,7,9,13,14] to a ranges string: '1-3,6-7,9,13-14'.
+    The list doesn't have to be sorted, and the integers don't have to be all unique.
+    '''
+    return ','.join(f'{x[0]}-{x[-1]}' if len(x)>1 else f'{x[0]}' 
+                        for x in [[e[1] for e in g]
+                        for _,g in groupby(enumerate(sorted(list(set(lst)))), key=lambda x: x[1]-x[0])])
+
+def rangesStringToList(ranges:str):
+    '''
+    Converts a ranges string such as '1-3,6-7,9,13-14' to a sorted list of ints: [1,2,3,6,7,9,13,14].
+    The ranges can overlap, yet each int in the resulting list will appear only once.
+    '''
+    limitsToRange = lambda a: range(int(a[0]), int(a[-1])+1)
+    try:
+        return sorted(list(set(n for r in re.split(',', ranges) for n in limitsToRange(re.split('-',r)))))
+    except:
+        raise ValueError(f'bad ranges string: {ranges}')

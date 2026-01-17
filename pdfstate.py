@@ -151,7 +151,7 @@ class PdfState:
                     if len(z) == 0: z.append(0)
                     z[-1] -= float(token)*cs.fontSize/1000
 
-            # don't interpret the last displacement as space since it may be followed a negative displacement
+            # don't interpret the last displacement as space since it may be followed by a negative displacement
             # in TD etc; instead, just ignore it, but include it in the width calculation (next line)
             # this way it will contribute to cs.Tm and will be interpreted as space, if necessary, later
             zTight = z if len(z) == 0 or isinstance(z[-1],str) else z[:-1]
@@ -166,15 +166,33 @@ class PdfState:
                 break
             shiftTight *= (cs.Th / 100.0)
 
-            textString = ''.join(cs.font.decodeCodeString(t) if isinstance(t,str)
-                                    else f' ' if t > cs.font.spaceWidth * cs.fontSize * .5 else f''
-                                    for t in zTight)
+            # textString = ''.join(cs.font.decodeCodeString(t) if isinstance(t,str)
+            #                         else f' ' if t > cs.font.spaceWidth * cs.fontSize * .5 else f''
+            #                         for t in zTight)
 
+            # Deal with spaces — they should never be translated directly, but rather inferred from spacings!
+            u_list = []
+            space_width = 0
+            for t in zTight:
+                if isinstance(t,str):
+                    assert len(t) == 1
+                    assert space_width == 0
+                    u = cs.font.decodeCodeString(t)
+                    if u == ' ':
+                        space_width = cs.font.width(t, isEncoded = True) * cs.fontSize
+                    else:
+                        u_list.append(u)
+                else:
+                    spacer = f' ' if t + space_width > cs.font.spaceWidth * cs.fontSize * .4 else f''
+                    u_list.append(spacer)
+                    space_width = 0
+            textString = ''.join(u_list)
+                    
             # This is the displacement by which a point at which the next symbol is placed is moved
             textWidth = sum(cs.font.width(t, isEncoded = True) * cs.fontSize if isinstance(t,str)
                             else t for t in z) * (cs.Th / 100.0)
             
-            # This is the actual visual width the text string; it is textWidth minus the spacing at the end
+            # This is the actual visual width of the text string; it is textWidth minus the spacing at the end
             textWidthTight = sum(cs.font.width(t, isEncoded = True) * cs.fontSize if isinstance(t,str)
                                 else t for t in zTight) * (cs.Th / 100.0)
 

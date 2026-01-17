@@ -137,7 +137,7 @@ class PdfStreamEditor:
 
     def apply_Tw(self, s, cs:dict):
         '''
-        Introduces explicit word spacing (Tw) in text operator strings. After applying this function
+        Introduces explicit word spacing (cs.Tw) in text operator strings. After applying this function
         to all such strings, the Tw operators can be dropped from the stream entirely.
 
         PDF Ref. 1.7, sec. 5.2.2: "Word spacing (Tw) is applied to every occurrence of the single-byte
@@ -233,6 +233,10 @@ class PdfStreamEditor:
                                     debug = self.debug,
                                     extractFontProgram = self.extractFontProgram,
                                     makeSyntheticCmap = self.makeSyntheticCmap)
+
+                # to avoid infinite recursion in the recurse() call below when there are xobj loops
+                xobjCache[id(x)] = None
+
                 xobjCache[id(x)] = editor.recurse(recursedFunction, xobjCache, *args, **kwarg)
                 if editor.isModified: self.isModified = True
 
@@ -438,7 +442,7 @@ class PdfStreamEditor:
     def processTextFunction(self, xobjCache:dict, tree:list=None, options:dict = {}):
         '''
         An auxiliary function used by .print_text(). Available options:
-        {'regex':'', 'regexCheckPath':None, 'removeOCR':False, 'render':False}
+        {'regex':'', 'regexCheckPath':None, 'removeOCR':False, 'render':False, 'removeAlt':False}
         '''
         res = self.xobj.inheritable.Resources
         firstCall = tree == None
@@ -452,6 +456,8 @@ class PdfStreamEditor:
         render = options.get('render', False)
         removeAlt = options.get('removeAlt', False)
 
+        # HIDE = options.get('HIDE', False)
+
         edit = regex != '' or removeOCR
 
         # This is edited tree if options call for editing
@@ -460,6 +466,27 @@ class PdfStreamEditor:
         # A list of chunks - (data, matrix) tuples
         chunks = []
 
+        removeOutlinedText = False
+
+        # merge adjacent BT blocks into a single BT block, but insert '1 0 0 1 0 0 Tm' between their bodies
+        buffer = []
+        tree_new = []
+        for leaf in tree:
+            if leaf[0] == 'BT':
+                if len(buffer) > 0:
+                    buffer.append(['Tm', [1,0,0,1,0,0]])
+                buffer += leaf[2]
+            else:
+                if len(buffer) > 0:
+                    tree_new.append(['BT', [], buffer])
+                    buffer = []
+                tree_new.append(leaf)
+        if len(buffer) > 0:
+            tree_new.append(['BT', [], buffer])
+
+        tree = tree_new
+
+        # Main processing starts here
         for leaf in tree:
 
             cmd,args = leaf[0],leaf[1]
@@ -500,6 +527,15 @@ class PdfStreamEditor:
 
             # Process the nested BT/ET block a recursive call on the body
             modified = False
+
+            # if [cmd,args] == ['k', ['0','0','0','0']]:
+            #     print('HIDE = True')
+            #     options['HIDE'] = True
+
+            # if cmd == 'k' and args != ['0','0','0','0']:
+            #     print('HIDE = False')
+            #     options['HIDE'] = False
+
             if cmd == 'BT':
 
                 btChunks = self.processTextFunction(xobjCache, leaf[2], options)
@@ -511,23 +547,52 @@ class PdfStreamEditor:
                     btText = PdfStreamEditor.chunks_to_text(btChunks)
 
                     discardText = (regex != '' and re.search(regex,btText) != None)
+                    # discardText = options.get('HIDE')
 
+                    containsOCR = any(len(kid[1])>0 and (kid[0],kid[1][0]) == ('Tr','3') for kid in leaf[2])
 
-                    discardOCR = False if not removeOCR else \
-                        any(len(kid[1])>0 and (kid[0],kid[1][0]) == ('Tr','3') for kid in leaf[2])
-                    
+                    discardOCR = removeOCR and containsOCR
+
                     if discardText or discardOCR:
 
                         print(f'Removed text: {btText}')
                         self.isModified = True
                         modified = True
 
-                        body = [l for l in leaf[2] if l[0] not in ['Tj', 'TJ', '"', "'"]]
+                        body = [l for l in leaf[2] if l[0] not in ['Tj', 'TJ', '"', "'", 'T*', 'Td', 'TD']]
                         outTree.append(['BT', [], body])
 
                         if regexCheckPath != None:
                             with open(regexCheckPath, 'a') as file:
                                 file.write(btText + '\n')
+
+
+                    # if removeOCR:
+
+                    #     assert modified is False
+
+                    #     body = []
+
+                    #     for l in leaf[2]:
+
+                    #         if l[0] == 'Tr':
+
+                    #             if l[1][0] == '2':
+                    #                 l[1][0] = 0
+                    #                 modified = True
+
+                    #             removeOutlinedText = l[1][0] == '1'
+                    #             body.append(l)
+
+                    #         else:
+                    #             if removeOutlinedText and l[0] in ['Tj', 'TJ', '"', "'"]:
+                    #                 modified = True
+                    #             else:
+                    #                 body.append(l)
+    
+                    #     if modified:
+                    #         outTree.append(['BT', [], body])
+                    #         self.isModified = True
 
             # Process marked document content (for removing alternate text)
             if cmd == 'BDC' and removeAlt:
@@ -564,14 +629,44 @@ class PdfStreamEditor:
 
     # --------------------------------------------------------------- chunks_to_text()
 
+    @staticmethod
     def chunks_to_text(chunks:list):
         '''
         Extract text from chunks. All text chunks consisting entirely of space runs are discarded and
         spaces are inferred/reconstructed from chunks' box matrices.
         '''
+
+        # Analyze all text chunks to get text's left edge (xmin_global) and average symbol height
+        bbox = None
+        heights = []
+        if len(chunks) == 0:
+            return ''
+
+        for chunk in chunks:
+            chunkMatrix = chunk[1]
+            box = chunkMatrix * BOX([0,0,1,1])
+            heights.append(abs(box[3] - box[1]))
+            bbox = box + bbox
+        xmin_global = bbox[0]
+        height_avg = sum(heights)/len(heights) if len(heights) > 0 else 1
+
+        # Convert chunks to text
         chunks = [chunk for chunk in chunks if isinstance(chunk[0], str) and not re.search(r'^ *$', chunk[0])]
         chunks = sorted(chunks, key = lambda t: t[1])
-        return ''.join((chunks[i][1].spacer(chunks[i-1][1]) if i>0 else '') + chunks[i][0] for i in range(len(chunks)))
+        chunk_prev = None
+        text = []
+        for chunk in chunks:
+            spacer = '' if chunk_prev is None else chunk[1].spacer(chunk_prev[1])
+            chunk_prev = chunk
+            if len(spacer) > 0 and spacer[0] == '\n': # Check if this is a new line
+                box = chunk[1] * BOX([0,0,1,1])
+                xmin = box[0]
+                n_spaces = int((xmin - xmin_global) / (0.67 * height_avg))
+                spacer2 = spacer + ' '*n_spaces
+                text.append(spacer2 + chunk[0])
+            else:
+                text.append(spacer + chunk[0])
+        return ''.join(text)
 
 
     # --------------------------------------------------------------- make_coords_relative()

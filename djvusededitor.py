@@ -26,10 +26,27 @@ import xml.etree.ElementTree as ET # for parsing hOCR files
 
 class DjVuSedEditor:
 
-    def __init__(self, djvuSedStream:str):
+    def __init__(self, djvuSedStream:str, useSoftHyphens:bool = False):
         '''Parses the djvuSedStream and stores the resulting djvused page tree in self.tree'''
         self.stream = djvuSedStream
+        self.useSoftHyphens = useSoftHyphens
         self.tree = DjVuSed.stream_to_tree(self.stream)
+
+    @staticmethod
+    def fixSoftHyphens(chunk):
+        '''
+        If the chunk is a string and it ends with a hyphen, changes it to soft hyphen.
+        If the chunk is list, calls itself on the last element of the list.
+        '''
+        if isinstance(chunk, str):
+            if chunk[-1] == '-':
+                chunk = chunk[:-1] + chr(0xAD)
+        elif isinstance(chunk, list):
+            chunk[-1] = DjVuSedEditor.fixSoftHyphens(chunk[-1])
+        else:
+            raise TypeError(f'chunk should be a string or a list: {chunk}')
+
+        return chunk
 
     def djvusedPageTreeToPDFStream(self, djvusedPageTree:list, font:PdfFont, baseline_y = None, scale_y = None):
         '''
@@ -52,6 +69,8 @@ class DjVuSedEditor:
             if symbol.name == 'line':
                 baseline_y = BASELINE(ymin, ymax)
                 scale_y = int(ymin - ymax)
+                if self.useSoftHyphens:
+                    chunk = DjVuSedEditor.fixSoftHyphens(chunk)
 
             text = chunk[5] if len(chunk) == 6 and isinstance(chunk[5],str) else chunk[5:]
 
@@ -122,8 +141,8 @@ class DjVuSedEditor:
 
                 # Remove old OCR
                 if removeOCR:
-                    resources = pdfPage.inheritable.Resources
-                    if resources == None: resources = PdfDict(); pdfPage.Resources = resources
+                    if pdfPage.inheritable.Resources is None:
+                        pdfPage.Resources = PdfDict()
                     glyphMap = PdfFontGlyphMap(loadAdobeGlyphList = True)
                     pdfEditor = PdfStreamEditor(pdfPage, glyphMap = glyphMap, makeSyntheticCmap = True)
                     pdfEditor.processText(xobjCache=xobjCache, options={'removeOCR':True})

@@ -2,6 +2,13 @@
 
 import re, sys
 from sly import Lexer, Parser
+from pdfrw import PdfDict, PdfTokens
+
+# ============================================================== timeit
+
+from time import time
+tStart = time()
+def timeit(s): print(f'TIME: {s}: {time()-tStart:0.3f} sec')
 
 # ========================================================================== class PdfStreamSyntax
 
@@ -32,13 +39,13 @@ class PdfStreamSyntax:
     text_positioning = r'Td|TD|Tm|T\*'
     text_showing = r'Tj|TJ|\'|\"'
 
-    indirect_reference = r'R'
+    # indirect_reference = r'R'
 
     operator = '|'.join([marked_content,compatibility_section,xobjects,
                             type3_fonts,shading_patterns,
                             general_graphics_state,special_graphics_state,color,
                             path_construction,path_painting,clipping_paths,
-                            text_state,text_positioning,text_showing,indirect_reference])
+                            text_state,text_positioning,text_showing])
 
 # ========================================================================== class PdfStreamLexer
 
@@ -196,10 +203,13 @@ class PdfStream:
     for translation between the pdf stream and pdf stream tree representations.
     '''
 
+    # ------------------------------------------------------------------------------ stream_to_tree()
+
     def stream_to_tree(stream:str,
                        filterText:bool=False,
                        filterImages:bool=False,
                        filterVector:bool=False,
+                       compactify:bool=False,
                        XObject=None):
         '''
         Parse stream and return the resulting parsed PDF stream tree.
@@ -207,85 +217,182 @@ class PdfStream:
         to extract full text–related information from the stream.
         '''
         assert isinstance(stream, str)
+
         lexer, parser = PdfStreamLexer(), PdfStreamParser()
-        tokens = lexer.tokenize(stream)
 
-        if filterText:
-            tokens = PdfStream.filter_text(tokens,XObject)
+        timeit('DEBUG: tokenize started')
 
-        if filterImages:
-            tokens = PdfStream.filter_images(tokens,XObject)
+        # tokens = lexer.tokenize(stream)
+        # n = len(list(tokens))
+        for t in PdfTokens(stream):
+            print(t)
+        timeit('DEBUG: tokenize ended')
+        sys.exit()
 
-        if filterVector:
-            tokens = PdfStream.filter_vector(tokens,XObject)
+        if any((filterText, filterImages, filterVector)):
+            tokens = PdfStream.filter_tokens(tokens = tokens,
+                                                filterText = filterText,
+                                                filterImages = filterImages,
+                                                filterVector = filterVector,
+                                                XObject = XObject)
+            if compactify:
+                tokens = PdfStream.compact_tokens(tokens = tokens)
+
 
         tree = parser.parse(tokens)
+
+        if compactify and any((filterText, filterImages, filterVector)):
+            tree = PdfStream.compact_tree(tree)
+
         return tree
 
-    def filter_text(tokens, XObject=None):
-        '''
-        Pass all tokens except the BT/ET blocks
-        '''
-        # N.B. sometimes Tf is present outside the BT/ET block!
+    # ------------------------------------------------------------------------------ filter_tokens()
 
-        isText = False
-
-        for tok in tokens:
-            if tok.type == 'BT': isText = True
-            elif tok.type == 'ET': isText = False
-            elif not isText:
-                yield tok
-
-    def filter_images(tokens, XObject=None):
+    def filter_tokens(tokens,
+                        filterText:bool = False,
+                        filterImages:bool = False,
+                        filterVector:bool = False,
+                        XObject:PdfDict = None):
         '''
-        Pass all tokens except the images Do operators
+        Pass all tokens except the specified classes of operators/objects
         '''
-        args = [] # operator arguments and everything else that precedes it
 
-        for tok in tokens:
-            if tok.type == 'OPERATOR':
-                if tok.value == 'Do' and XObject is not None and args[-1].value in XObject \
-                        and XObject[args[-1].value].Subtype == '/Image':
-                    for arg in args[:-1]: yield arg
-                else:
-                    for arg in args: yield arg
-                    yield tok
-                args = []
-            else:
-                args.append(tok)
+        text_state = ['Tc','Tw','Tz','TL','Tf','Tr','Ts']
+        text_positioning = ['Td','TD','Tm','T*']
+        text_showing = ['Tj','TJ',"'",'"']
+        text_operators = set(text_state + text_positioning + text_showing)
 
-        # Flush
-        for arg in args: yield arg
-        
-
-    def filter_vector(tokens, XObject=None):
-        '''
-        Pass all tokens except the vector graphics operators
-        '''
-        path_construction = ['m', 'l', 'c', 'v', 'y', 'h', 're']
-        path_painting = ['S', 's', 'f', 'F', 'f*', 'B', 'B*', 'b', 'b*', 'n']
+        path_construction = ['m','l','c','v','y','h','re']
+        path_painting = ['S','s','f','F','f*','B','B*','b','b*','n']
         clipping_paths = ['W','W*']
-        vector_graphics = path_construction + path_painting + clipping_paths
+        shading_operator = ['sh']
+        vector_operators = set(path_construction + path_painting + clipping_paths + shading_operator)
 
-        isText = isInlineImage = False
+        isInlineImage = False
         args = []
         for tok in tokens:
-            if tok.type == 'BT': isText = True; yield tok
-            elif tok.type == 'ET': isText = False; yield tok
-            elif tok.type == 'BI': isInlineImage = True; yield tok
-            elif tok.type == 'INLINE_IMAGE_STREAM': isInlineImage = False; yield tok
-            elif isText or isInlineImage: yield tok
-            elif tok.type == 'OPERATOR':
-                if tok.value not in vector_graphics:
-                    for arg in args: yield arg
+            if tok.type in ['BT', 'ET']: # Start/end of text blocks
+                if not filterText:
                     yield tok
+            elif tok.type == 'BI': # Start of an inline image
+                isInlineImage = True
+                if not filterImages:
+                    yield tok
+            elif tok.type == 'INLINE_IMAGE_STREAM': # End of an inline image
+                isInlineImage = False
+                if not filterImages:
+                    yield tok
+            elif isInlineImage: # The dictionary of the inline image
+                if not filterImages:
+                    yield tok
+            elif tok.type == 'OPERATOR':
+                if tok.value == 'Do':
+                    assert len(args) == 1 # For debug purposes
+                    name = args[-1].value
+                    isImage =  XObject is not None and name in XObject and XObject[name].Subtype == '/Image'
+                    if isImage and filterImages:
+                        yield from args[:-1]
+                    else:
+                        yield from args; yield tok
+                elif tok.value in text_operators:
+                    if not filterText:
+                        yield from args; yield tok
+                elif tok.value in vector_operators:
+                    if not filterVector:
+                        yield from args; yield tok
+                else:
+                    yield from args; yield tok
                 args = []
             else:
                 args.append(tok)
 
         # Flush
-        for arg in args: yield arg
+        yield from args
 
+    # ------------------------------------------------------------------------------ compact_tokens()
+
+    def compact_tokens(tokens):
+        '''
+        Reads `tokens` up to and including the next non-nested `Q` token, or up to the end.
+        Yields all read tokens up to and including the last painting operator,
+        followed by a non-nested 'Q' token if it was encountered. Whenever
+        nested `q/Q` blocks are encountered, this function calls itself recursively on those.
+        '''
+
+        compatibility_section = r'BX|EX'
+        xobjects = r'Do'
+        shading_patterns = r'sh'
+        path_painting = r'S|s|F|f\*|f|B\*|B|b\*|b|n'
+        clipping_paths = r'W\*|W'
+        text_showing = r'Tj|TJ|\'|\"'
+
+        painting_operators = r'|'.join([compatibility_section, xobjects, shading_patterns,
+                                        path_painting, clipping_paths, text_showing])
+        painting_operators = set(painting_operators.split('|'))
+        
+        def isPainting(tok):
+            return tok.type in ['INLINE_IMAGE_STREAM', 'BT', 'ET', 'BI'] \
+                or tok.type == 'OPERATOR' and tok.value in painting_operators
+
+        buffer = []
+
+        for tok in tokens:
+
+            # All tokens are added to the buffer first
+            buffer.append(tok)
+
+            # Painting tokens flush the buffer
+            if isPainting(tok):
+                yield from buffer
+                buffer = []
+
+            if tok.type == 'OPERATOR' and tok.value == 'q':
+
+                block = list(PdfStream.compact_tokens(tokens)) # recursion
+
+                if not (len(block) > 0 and block[-1].type == 'OPERATOR' and block[-1].value == 'Q'):
+                    raise ValueError('the q-block doesn\'t end with Q')
+
+                if len(block) > 1:
+                    # Flush undecided
+                    yield from buffer
+                    buffer = []
+                    # Flush block
+                    yield from block
+                else:
+                    buffer.pop() # remove q
+
+            if tok.type == 'OPERATOR' and tok.value == 'Q':
+                yield tok
+                break
+
+    # ------------------------------------------------------------------------------ compact_tree()
+
+    def compact_tree(tree:list):
+        '''
+        Compacts a tree by substituting same-kind consecutive state variables changing
+        operators with the last instance
+        '''
+
+        general_graphics_state_without_gs = r'w|J|j|M|d|ri|i'
+        color = r'CS|cs|SCN|SC|scn|sc|G|g|RG|rg|K|k'
+        text_state = r'Tc|Tw|Tz|TL|Tf|Tr|Ts'
+
+        state_changing_operators = r'|'.join((general_graphics_state_without_gs, color, text_state))
+        state_changing_operators = set(state_changing_operators.split('|'))
+
+        r = []
+        prev_cmd = None
+        for leaf in tree:
+            cmd, _ = leaf[:2]
+            if cmd in state_changing_operators and cmd == prev_cmd:
+                r[-1] = leaf # replace
+            else:
+                r.append(leaf)
+            prev_cmd = cmd
+        return r
+
+    # ------------------------------------------------------------------------------ tree_to_stream()
 
     def tree_to_stream(tree:list):
         '''
@@ -307,6 +414,8 @@ class PdfStream:
                 s += PdfStream.tree_to_stream(kids)
                 s += pair[cmd]+'\n'
         return s
+
+    # ------------------------------------------------------------------------------ obj_to_stream()
 
     def obj_to_stream(obj):
         '''

@@ -766,6 +766,7 @@ greaterthanorequalangled;2A7E
 integralex;23ae
 EurDig;20AC
 zero.slash;0030
+UIup;25B2
 # ============================================== Some weird version of LH-fonts
 visualspace;2423
 palochka;04c0
@@ -1606,6 +1607,11 @@ cyrinvE;018f
 cyrinve;0259
 cyrstraightU;04AE
 cyrstraightu;04AF
+# ============================================== Alt Cyr Names
+cyrIbreve;0419
+cyribreve;0439
+cyrSOFTsign;042C
+cyrsoftsign;044C
 # ============================================== Mathematica fonts
 CapGamma;0393
 Slash1;002f
@@ -1888,6 +1894,7 @@ tildewidest;02DC
 # ============================================== Glyph names used by TeX fonts
 AE;00C6
 Complex;2102
+Coffeecup;2615
 Delta1;2206
 Gamma1;0393
 Ifractur;2111
@@ -1968,6 +1975,7 @@ contintegraltext;222E
 coproduct;2210
 coproductdisplay;2210
 coproducttext;2210
+dodecastar4;2739
 dotminus;2238
 dagger;2020
 daggerdbl;2021
@@ -2058,6 +2066,8 @@ oslash;00F8
 owner;220B
 paragraph;00B6
 partialdiff;2202
+partialdiff1;2202
+partial;2202
 period;002E
 periodcentered;00B7
 period.numerator;00B7
@@ -2079,6 +2089,8 @@ propersubset;2282
 propersuperset;2283
 proportional;221D
 questiondown;00BF
+quilsinglleft;2039
+quilsinglright;203A
 quotedblleft;201C
 quotedblright;201D
 quoteleft;2018
@@ -2143,4 +2155,14 @@ wreathproduct;2240
 xi;03BE
 zerooldstyle;0030
 zeta;03B6
+# ------------------- Bold Math from NSBMI
+Qrational;211A
+Aalgebraic;1D538
+Hquaternion;210D
+Torus;1D54B
+kring;1D55C
+bbone;1D7D9
+bbB;1D539
+bbK;1D542
+leftthreetimes;22CB
 # END

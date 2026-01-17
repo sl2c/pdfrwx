@@ -121,7 +121,7 @@ class MAT(list):
 
     def spacer(self, prev:'MAT') -> str:
         '''
-        Infer a spacer between two text chunks interpreting self and prev as their boxes.
+        Infer a spacer between two text chunks interpreting self and prev as their matrices.
         '''
         # A typical space width for a proportional font is 0.25-0.33, for fixed-width-font - 0.67
         SPACE_WIDTH = 0.5
@@ -201,7 +201,7 @@ class BOX(list):
             raise TypeError(f'cannot check if {x} is inside {self}')
 
     def __add__(self, box: 'BOX') -> 'BOX':
-        '''Add: self + box, which is a minimal BOX such that it contains both self and box'''
+        '''Add: `self + box`, which is a minimal BOX such that it contains both `self` and `box`'''
         if box == None: return self.copy()
         if not isinstance(box, BOX): raise TypeError(f'cannot add {self} and {box}')
         return BOX(list(self) + list(box))
@@ -210,6 +210,16 @@ class BOX(list):
         '''Multiply: self * scale, produces a scaled version of self with self's center as a fixed point'''
         center, diag = (self.ll() + self.ur())*0.5, (self.ur() - self.ll())*0.5
         return BOX(list(center - diag*scale) + list(center + diag*scale))
+
+    def __mul__(self, box:'BOX') -> 'BOX':
+        '''Multiply: `self * box`, produces a maximal BOX which fits in both `self` and `box`'''
+        xmin = max(self[0], box[0])
+        ymin = max(self[1], box[1])
+        xmax = min(self[2], box[2])
+        ymax = min(self[3], box[3])
+        if xmin > xmax or ymin>ymax:
+            return None
+        return (BOX([xmin, ymin, xmax, ymax]))
 
     def copy(self):
         '''A copy'''

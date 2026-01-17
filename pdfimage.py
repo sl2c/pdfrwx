@@ -6,10 +6,13 @@
 # https://github.com/homm/
 # https://twitter.com/wouldntfix
 
-from pdfrw import PdfReader, PdfWriter, PdfObject, PdfName, PdfArray, PdfDict, IndirectPdfDict
+from pdfrw import PdfWriter, PdfObject, PdfName, PdfArray, PdfDict, IndirectPdfDict
 from pdfrw import py23_diffs # Ugly, but necessary: https://github.com/pmaupin/pdfrw/issues/161
 
-from pdfrwx.common import err, msg, warn, eprint, get_key, get_any_key, getExecPath
+from pdfrwx.pdfreaderx import PdfReaderX
+from pdfrwx.common import err, msg, warn, eprint, get_key, get_any_key, \
+                            getExecPath, encapsulate, decapsulate, formatWithCommas, formatSize
+
 from pdfrwx.pdffilter import PdfFilter
 from pdfrwx.pdfobjects import PdfObjects
 from pdfrwx.pdffunctionparser import PdfFunction
@@ -81,7 +84,7 @@ class PdfColorSpace:
     @staticmethod
     def get_name(cs:CS_TYPE):
         '''
-        Returns the name of the color space (on of the PdfColorSpace.spaces.keys())
+        Returns the name of the color space (one of the PdfColorSpace.spaces.keys())
         '''
         name = cs if not isinstance(cs,PdfArray) \
                     else '/NChannel' if cs[0] == '/DeviceN' and len(cs) == 5 and cs[4].Subtype == '/NChannel' \
@@ -94,6 +97,7 @@ class PdfColorSpace:
     def get_cpp(cs:CS_TYPE):
         '''
         Return the number of components per pixel for a give color space.
+        This always returns an int unless `cs` is None, in which case None is returned.
         '''
         name = PdfColorSpace.get_name(cs)
         return int(cs[1].N) if name == '/ICCBased' else \
@@ -141,7 +145,10 @@ class PdfColorSpace:
         if len(pal) != size:
             raise ValueError(f'palette size mismatch: expected {size}, got {len(pal)}')
 
-        return base, np.frombuffer(pal, 'uint8').reshape(-1, palette_cpp)
+        pal_array = np.frombuffer(pal, 'uint8')
+        if palette_cpp != 1:
+            pal_array = pal_array.reshape(-1, palette_cpp)
+        return base, pal_array
 
     @staticmethod
     def create_profile(cs:CS_TYPE):
@@ -760,21 +767,25 @@ class PdfImage(AttrDict):
 
     def change_mode(self, mode:str, intent:str = '/Perceptual'):
         '''
-        Changes image mode. The mode argument can be any one of: 'L', 'RGB', 'CMYK'
+        Changes image mode. The mode argument can be any one of: 'L', 'RGB', 'CMYK'.
+        Returns True if self is modified as a results of the conversion,
+        otherwise prints a warning and returns False.
         '''
+
 
         if mode not in ['L', 'RGB', 'CMYK']: raise ValueError(f'cannot convert to mode: {mode}')
 
         cs_name = PdfColorSpace.get_name(self.ColorSpace)
 
-        if mode == self.get_mode() and self.ColorSpace in [PdfName.DeviceGray, PdfName.DeviceRGB, PdfName.DeviceCMYK]:
+        if mode == self.get_mode() and cs_name in ['/DeviceGray', '/DeviceRGB', '/DeviceCMYK', '/ICCBased']:
             warn(f'old and new modes are the same: {mode}')
             return False
 
-        msg(f'converting (cs, mode) = ({cs_name}, {self.get_mode()}) -> {mode}')
+        msg(f'converting ({cs_name}, {self.get_mode()}) -> {mode}')
 
         if not self.isRendered:
             self.render()
+            msg(f'rendered into colorspace: {PdfColorSpace.get_name(self.ColorSpace)}')
 
         if mode == self.get_mode():
             return True
@@ -828,8 +839,8 @@ class PdfImage(AttrDict):
 
         if not output_profile:
             # Conversion to L: first convert to RGB to account for input_profile, then to L
-            # image = ImageCms.profileToProfile(image, input_profile, srgb_profile,
-            #                                 renderingIntent = renderingIntent, outputMode='RGB')
+            pil = ImageCms.profileToProfile(pil, input_profile, srgb_profile,
+                                            renderingIntent = renderingIntent, outputMode='RGB')
             pil = pil.convert('L')
         else:
             pil = ImageCms.profileToProfile(pil, input_profile, output_profile,
@@ -937,7 +948,7 @@ class PdfImage(AttrDict):
         '''
         self.set_pil(self.get_pil().resize((width, height)))
 
-    # -------------------------------------------------------------------------------------- saveAs
+    # -------------------------------------------------------------------------------------- saveAs()
 
     def saveAs(self, Format:str,
                     Q:float = None,
@@ -1081,8 +1092,8 @@ class PdfImage(AttrDict):
             if Format == 'JPEG':
                 s = stream.rstrip(b'\n')
                 if s[-2:] != b'\xff\xd9':
+                    # stream += b'\xff\xd9'
                     raise ValueError(f'bad JPEG stream tail: {s[-10:]}')
-                     # stream += b'\xff\xd9'
 
         return stream, ext[Format]
 
@@ -1094,9 +1105,7 @@ class PdfImage(AttrDict):
         Convert the image to a PDF page.
         '''
         # Encode image
-        xobj = self.encode()
-        if self.bpc == 1 and isMask:
-            xobj.ImageMask = PdfObject('true')
+        xobj = self.encode(isMask = isMask)
 
         print('RESULT:')
         pprint(xobj)
@@ -1131,6 +1140,7 @@ class PdfImage(AttrDict):
         
         * 'ZIP': compress with /FlateDecode without PNG predictors
         * 'PNG': compress with /FlateDecode with PNG predictors
+        * 'RLE': compress with /RunLengthDecode
         * 'JPEG': compress with /DCTDecode; compressionRatio should be specified
         * 'JPEG2000': compress with /JPXDecode; either compressedQuality or compressionRatio should be specified
 
@@ -1157,39 +1167,67 @@ class PdfImage(AttrDict):
         image = PdfImage(obj = obj)
 
         if PdfColorSpace.get_name(image.ColorSpace) == '/Indexed':
-            msg('/Indexed colorspace will not be recompressed')
-            return False
+            msg('rendering /Indexed colorspace before re-compressing')
+            image.render()
         
         bpc = image.bpc
         cs = image.ColorSpace
 
         DecodeParms = None
+
+        fmt = Format
+
+        if fmt == 'PNG' and PdfColorSpace.get_cpp(PdfImage.xobject_get_cs(image_obj)) not in [1,3]:
+            msg(f'PNG compression only works for 1- or 3-component images; falling back to ZIP')
+            fmt = 'ZIP'
  
-        if Format == 'ZIP':
+        if fmt == 'ZIP':
 
             stream = zlib.compress(image.to_bytes())
             Filter = PdfName('FlateDecode')
 
-        elif Format == 'PNG':
+        elif fmt == 'RLE':
 
-            if image.get_mode() not in ['L', 'RGB']:
-                msg(f'mode {image.get_mode()} not supported by PNG; skipping')
+            stream = PdfFilter.rle_encode(image.to_bytes())
+            Filter = PdfName('RunLengthDecode')
+
+        elif fmt == 'PNG':
+
+            cpp = image.get_cpp()
+
+            if cpp not in [1, 3]:
+                msg(f'cpp = {cpp} not supported by PNG; skipping')
                 return False
 
-            png, _ = image.saveAs('PNG')
-            stream, Predictor = PdfImage._png_get_stream_and_filter(png)
             Filter = PdfName('FlateDecode')
-            DecodeParms = PdfDict(Predictor = Predictor, # PDF Spec.: actual value doesn't matter a.l.a. it's 10..15
-                                    Colors = PdfColorSpace.get_cpp(cs),
-                                    BitsPerComponent = bpc,
-                                    Columns = image.w())
 
-        elif Format == 'JPEG':
+            png, _ = image.saveAs('PNG')
+
+            stream, Predictor, columns, bpc_png, cpp_png, interlace = PdfImage._png_get_stream_and_params(png)
+
+            assert bpc_png == 8
+            assert cpp_png == cpp
+            assert interlace == 0
+            assert columns == image.w()
+            
+            msg(f'compressing with PNG predictor: {Predictor}')
+            DecodeParms = PdfDict(Colors = cpp,
+                                    Columns = columns,
+                                    Predictor = Predictor)
+            bpc = 8
+
+        elif fmt == 'JPEG':
+
+            cpp = image.get_cpp()
+            if cpp not in [1,3,4]:
+                msg(f'cpp = {cpp} not supported by JPEG; skipping')
+                return False
+
 
             stream, _ = image.saveAs(Format = 'JPEG', Q = Q, invertCMYK = True)
             Filter = PdfName('DCTDecode')
 
-        elif Format == 'JPEG2000':
+        elif fmt == 'JPEG2000':
 
             if image.get_mode() not in ['L', 'RGB']:
                 msg(f'mode {image.get_mode()} not supported by JPEG2000; skipping')
@@ -1207,8 +1245,10 @@ class PdfImage(AttrDict):
 
         # Compare sizes before/after
         size_new = len(stream)
-        if Format == 'ZIP' or size_new * 10 < size_old * 9:
-            msg(f're-compressing {obj.Filter} --> {Filter}: {print_size_change(size_old, size_new)}')
+        if Format == 'ZIP' or Format == 'RLE' \
+                or Format == 'PNG' and size_new < size_old \
+                or size_new * 10 < size_old * 9:
+            msg(f're-compressing {image_obj.Filter} --> {Filter}: {print_size_change(size_old, size_new)}')
             obj.stream = stream.decode('Latin-1')
             obj.Filter = Filter
             obj.DecodeParms = DecodeParms
@@ -1220,7 +1260,7 @@ class PdfImage(AttrDict):
 
             return True
         else:
-            msg(f'skipping {obj.Filter} --> {Filter}: {print_size_change(size_old, size_new)}')
+            msg(f'skipping {image_obj.Filter} --> {Filter}: {print_size_change(size_old, size_new)}')
             return False
 
     # -------------------------------------------------------------------------------------- encode()
@@ -1236,8 +1276,9 @@ class PdfImage(AttrDict):
 
         DecodeParms = None
         Decode = None
+        bpc = self.bpc
 
-        if self.bpc == 1:
+        if bpc == 1:
 
             Filter = 'CCITTFaxDecode'
             pil = self.get_pil()
@@ -1275,7 +1316,7 @@ class PdfImage(AttrDict):
             Subtype = PdfName.Image,
             Width = self.w(),
             Height = self.h(),
-            BitsPerComponent = self.bpc,
+            BitsPerComponent = bpc,
             ColorSpace = self.ColorSpace if not isMask else None,
             ImageMask = PdfObject('true') if isMask else None,
             Filter = PdfName(Filter),
@@ -1366,6 +1407,29 @@ class PdfImage(AttrDict):
         s += obj.stream
         s += '\nEI\n'
 
+        return s
+
+    # -------------------------------------------------------------------------------------- xobject_str()
+
+    @staticmethod
+    def xobject_str(obj:PdfDict):
+        '''
+        A compact string representation of an image XObject.
+        '''
+        filters_str = '+'.join(PdfFilter.filters_as_list(obj))
+        w, h = int(obj.Width), int(obj.Height)
+        bpc = PdfImage.xobject_get_bpc(obj)
+        cs_name = PdfColorSpace.get_mode(PdfImage.xobject_get_cs(obj), bpc)
+        size = formatSize(int(obj.Length))
+
+        s = f'{cs_name} ({w},{h})'
+        if bpc not in [8, None]:
+            s += f' ({bpc}bit)'
+        s += f' {filters_str} {size}'
+        if obj.Mask:
+            s += f' -> Mask: {PdfImage.xobject_str(obj.Mask)}'
+        if obj.SMask:
+            s += f' -> SMask: {PdfImage.xobject_str(obj.SMask)}'
         return s
 
     # -------------------------------------------------------------------------------------- xobject_get_bpc()
@@ -1551,13 +1615,13 @@ class PdfImage(AttrDict):
             T = lambda fileName: os.path.join(tmp, fileName)
             # can also try: cratios=[CR*4, CR*2, CR]
             if PSNR:
-                print(f'encoding JPEG200 with PSNR = [{PSNR}]')
+                print(f'encoding JPEG2000 with PSNR = [{PSNR}]')
                 Jp2k(T('encoded.jp2'), array, colorspace='RGB' if cpp == 3 else 'Gray', psnr=[PSNR], numres=numres)
             else:
                 # determine compression ratio
                 assert CR or Q
                 CR = int(round(CR)) if CR != None else int(round(2 ** ((100 - Q)/10.0)))
-                print(f'encoding JPEG200 with cratios = [{CR}]')
+                print(f'encoding JPEG2000 with cratios = [{CR}]')
                 Jp2k(T('encoded.jp2'), array, colorspace='RGB' if cpp == 3 else 'Gray', cratios=[CR], numres=numres)
             
             return open(T('encoded.jp2'), 'rb').read()
@@ -1665,12 +1729,17 @@ class PdfImage(AttrDict):
         bs.seek(offset)
         return bs.read(length)
 
-    # -------------------------------------------------------------------------------------- _png_get_stream_and_filter()
+    # -------------------------------------------------------------------------------------- _png_get_stream_and_params()
 
     @staticmethod
-    def _png_get_stream_and_filter(png:bytes):
+    def _png_get_stream_and_params(png:bytes):
         '''
-        Returns a tuple (IDAT_chunk, pngFilter), where pngFilter == 10..15 is the PNG prediction filter.
+        Returns a tuple `(IDAT_chunk, predictor, width, bpc, cpp, interlace)`, where
+        * `predictor` = 10..15 is the PNG predictor
+        * `width` is the width of the image
+        * `bpc` is BitsPerComponent
+        * `cpp` is ComponentsPerPixel
+        * `interlace` is 1 if PNG is interlaced and 0 otherwise
         '''
 
         png = BytesIO(png)
@@ -1678,25 +1747,57 @@ class PdfImage(AttrDict):
         png.seek(0)
         png.read(8)
 
+        width, bpc, cpp, interlace = None, None, None, None
+
         while True:
+
             length = struct.unpack(b'!L', png.read(4))[0]
             type = png.read(4)
             data = png.read(length)
             crc  = struct.unpack(b'!L', png.read(4))[0]
-            if crc != zlib.crc32(type + data): warn(f'crc error in chunk: {type}'); return None
-            if type == b'IDAT': idatChunks.append(data)
+
+            if crc != zlib.crc32(type + data):
+                warn(f'crc error in chunk: {type}')
+                return None, None, None, None, None
+
+            if type == b'IDAT':
+                idatChunks.append(data)
+
             if type == b'IHDR':
+                
                 assert length == 13
-                width, height, bpc, color_type, compression, pngFilter, interlace = struct.unpack(b'!LLBBBBB', data)
-                assert (width, height) == image.size
-                assert bpc == 8
-                assert color_type in [0, 2] # image.mode == 'RGB' or 'L'
-                assert interlace == 0
-                assert 10 <= pngFilter <= 15
+
+                width, height, bpc, color_type, _, _, interlace = struct.unpack(b'!LLBBBBB', data)
+
+                cpp = {0:1, 2:3, 3:1, 4:2, 6:4}.get(color_type) # color types: L, RGB, P, LA, RGBA
+
+                assert cpp is not None
+
+                bpp = (bpc * cpp + 7) // 8  # bytes per pixel (rounded up)
+
             if type == b'IEND': break
 
-        if len(idatChunks) == 0: warn(f'no IDAT chunks in PNG') ; return None
-        return b''.join(chunk for chunk in idatChunks), pngFilter
+        if len(idatChunks) == 0:
+            warn(f'no IDAT chunks in PNG')
+            return None, None, None, None, None
+        
+        stream = b''.join(chunk for chunk in idatChunks)
+        decompressed = zlib.decompress(stream)
+
+        # Each row: 1 filter byte + row data
+        stride = 1 + (width * bpp)
+
+        filters = set()
+
+        for y in range(height):
+            row_start = y * stride
+            filters.add(decompressed[row_start])
+
+        N = len(filters)
+        assert N > 0
+        predictor = 15 if N > 1 else filters.pop() + 10
+
+        return stream, predictor, width, bpc, cpp, interlace
 
     # -------------------------------------------------------------------------------------- _pil_get_colorspace()
 
@@ -1879,6 +1980,41 @@ def jbig2_compress(bitonal_images:dict, cpc:bool = False):
 
     msg('ended')
 
+def fix_png_predictors(obj:IndirectPdfDict):
+    '''
+    For all filters that use PNG predictors (PDF Ref. p. 76),
+    the function will set the value of the `/Predictor` parameter to 15:
+    the actual value of the predictor parameter doesn't matter, according the PDF Ref.,
+    as long as it is in the PNG predictors range (10..15).
+    Setting it to 15 prevents errors in some PDF viewers/processors that erroneously
+    base assumptions about the actual predictor values used in the stream on the value of
+    the `/Predictor` entry. Returns True if the object's predictors have been modified.
+    '''
+    assert isinstance(obj, PdfDict)
+    assert obj.Subtype == PdfName.Image
+
+    filters = encapsulate(obj.Filter)
+    parms = encapsulate(obj.DecodeParms)
+
+    MODIFIED = False
+    for f in range(len(filters)):
+
+        filter = filters[f]
+        parm = parms[f] if f < len(parms) else PdfDict()
+        if parm == 'null': parm = PdfDict()
+
+        if filter in ['/FlateDecode', '/Fl', '/LZWDecode', '/LZW']:
+            predictor = int(get_key(parm, '/Predictor', '1'))
+            if 10 <= predictor <= 14:
+                parms[f].Predictor = 15
+                obj.DecodeParms = decapsulate(parms)
+                MODIFIED = True
+
+    if obj.SMask:
+        MODIFIED |= fix_png_predictors(obj.SMask)
+
+    return MODIFIED
+
 # ============================================================================= modify_image_xobject()
 
 def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options):
@@ -1887,15 +2023,12 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options):
     compression, resizing/upsampling, color space conversions.
     '''
 
-    if options.predictors:
-        PdfFilter.uncompress(image_obj, fixPngPredictors = True)
-        return True
+    MODIFIED = False
 
     image = PdfImage(obj = image_obj)
 
     intent = image_obj.Intent if options.intent == 'native' else options.intent
 
-    MODIFIED = False
 
     # PDF Ref. v1.7, p.555: if SMask is present and has a Matte attribute,
     # the dimensions of the SMask and the parent image must equal.
@@ -2053,7 +2186,9 @@ if __name__ == '__main__':
 
     ap.add_argument('-dict', type=int, default=20, metavar='N', help='pages per JBIG2 symbol dictionary; def = 20')
 
-    ap.add_argument('-zip', action='store_true', help='compress color/gray images with JPEG')
+    ap.add_argument('-rle', action='store_true', help='compress color/gray images with RLE (Run-Length Encoding)')
+    ap.add_argument('-zip', action='store_true', help='compress color/gray images with ZIP')
+    ap.add_argument('-png', action='store_true', help='re-compress color/gray images compressed: ZIP -> PNG (with predictors)')
     ap.add_argument('-jpeg', action='store_true', help='compress color/gray images with JPEG')
     ap.add_argument('-j2k', action='store_true', help='compress color/gray images with JPEG 2000')
     ap.add_argument('-quality', '-q', type=int, metavar='Q', default=95, help='JPEG/JPEG 2000 compression quality; Q=0..100 (def=95)')
@@ -2107,7 +2242,7 @@ if __name__ == '__main__':
     if fileExt.lower() == '.pdf':
 
         assert len(options.inputPaths) == 1
-        pdf = PdfReader(options.inputPaths[0])
+        pdf = PdfReaderX(options.inputPaths[0])
         N = len(pdf.pages)
         eprint(f"[PAGES]: {N}")
 
@@ -2154,38 +2289,36 @@ if __name__ == '__main__':
             sys.exit()
 
         # Iterate over pages
-        cache = set()
+        test = lambda name, obj: isinstance(obj, PdfDict) and obj.Subtype == PdfName.Image \
+                    and name not in [PdfName.Mask, PdfName.SMask]
 
         PROCESSING_REQUESTED = False
 
         MODIFIED_GLOBAL = False
 
+        cache = set()
+
         for pageNo in pageRange:
 
-            print('-'*60)
-            print(f'Processing page {pageNo}')
-            print('-'*60)
 
             page = pdf.pages[pageNo-1]
 
-            objects = PdfObjects(page, cache=cache)
-            # objects = PdfObjects(page)
-
-            # for name, obj in objects:
-            #     if isinstance(obj, PdfDict):
-            #         print(name, '--', obj.Subtype)
-            # print('-'*60)
-            # sys.exit()
+            objects = PdfObjects(page, test = test, cache = cache)
 
             images = {name+f'_{id(obj)}':obj for name, obj in objects 
                         if isinstance(obj, PdfDict) and obj.Subtype == PdfName.Image 
                         and name not in [PdfName.Mask, PdfName.SMask]}
 
+
             # print(page)
-            print(f'Page {pageNo}, read {len(images)} images')
+            if len(images) == 0:
+                continue
+
             try: defaultColorSpaces = page.Resources.ColorSpace.keys()
             except: defaultColorSpaces = None
-            print(f'Page.Resources.ColorSpace:', defaultColorSpaces)
+
+            print(LINE_SINGLE)
+            print(f'Page {pageNo}, # images: {len(images)}, page cs: {defaultColorSpaces}')
 
             for n,idx in enumerate(images):
 
@@ -2195,20 +2328,24 @@ if __name__ == '__main__':
  
                 obj = obj_original.copy()
  
-                print(LINE_SINGLE)
-                print(f'[{n+1}] Image ID = {idx}')
-                pprint(obj)
-                print(LINE_SINGLE)
+                print(f'[{pageNo}:{n+1}] {PdfImage.xobject_str(obj)}')
 
                 # ---------- Modify images ----------
-                if options.zip \
-                        or options.upsample \
+
+                if options.predictors:
+
+                    PROCESSING_REQUESTED = True
+                    res = fix_png_predictors(obj)
+                    if res:
+                        print(' --> fixed PNG predictor')
+                    MODIFIED |= res
+
+                if options.upsample \
                         or options.resample \
                         or options.subsample \
                         or options.colorspace \
                         or options.contrast \
                         or options.bitonal \
-                        or options.predictors \
                         or options.despeckle \
                         or options.scale2x \
                         or options.auto:
@@ -2234,23 +2371,28 @@ if __name__ == '__main__':
                         MODIFIED = True
 
                 # ---------- Recompress images ----------
-                if options.jpeg or options.j2k:
+
+                if options.jpeg or options.j2k or options.zip or options.png or options.rle:
 
                     PROCESSING_REQUESTED = True
 
                     if PdfImage.xobject_get_bpc(obj) != 1:
-                        msg('recompressing image')
+                        Format = 'JPEG' if options.jpeg \
+                                    else 'JPEG2000' if options.j2k \
+                                    else 'RLE' if options.rle \
+                                    else 'PNG' if options.png \
+                                    else 'ZIP'
+                        msg(f're-compressing with {Format}')
                         res = PdfImage.recompress(obj,
-                                            Format = 'JPEG' if options.jpeg else 'JPEG2000' ,
-                                            Q = options.quality,
-                                            PSNR = options.psnr,
-                                            minsize = options.minsize)
-                        MODIFIED |= res
+                                                    Format = Format,
+                                                    Q = options.quality,
+                                                    PSNR = options.psnr,
+                                                    minsize = options.minsize)
 
                         size_old = len(obj_original.stream)
                         size_new = len(obj.stream)
                         print(LINE_SINGLE)
-                        if size_new * 10 < size_old*9:
+                        if res:
                             print(f'Compressed: {size_old} -> {size_new}')
                             MODIFIED = True
                         else:
@@ -2270,8 +2412,7 @@ if __name__ == '__main__':
 
                 if MODIFIED:
                     PdfImage.xobject_copy(obj, obj_original)
-                    print(LINE_SINGLE)
-                    print("RESULT:")
+                    print("Result:")
                     pprint(obj_original)
 
                 MODIFIED_GLOBAL |= MODIFIED
@@ -2301,6 +2442,8 @@ if __name__ == '__main__':
             if options.colorspace: suffix += f'-{options.colorspace}'
             if options.contrast: suffix += '-contrast'
             if options.zip: suffix += f'-zip'
+            if options.rle: suffix += f'-rle'
+            if options.png: suffix += f'-png'
             if options.jpeg: suffix += f'-jpeg-q={options.quality}'
             if options.j2k: suffix += f'-j2k-psnr={options.psnr}' if options.psnr else f'-j2k-q={options.quality}'
             if options.bitonal: suffix += '-bitonal'
@@ -2314,6 +2457,8 @@ if __name__ == '__main__':
             if (options.j2k): print('Warning: *** JPEG 2000 output may be buggy; please check manually ***')
             print(f'Writing output to {pdfOutPath}')
             PdfWriter(pdfOutPath, trailer=pdf, compress=True).write()
+        else:
+            print(f'[pdfimage.py] file not modified, no output is produced')
 
     # ---------- Input is images: convert to PDF ----------
     else:
