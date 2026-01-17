@@ -220,14 +220,15 @@ class PdfStream:
 
         lexer, parser = PdfStreamLexer(), PdfStreamParser()
 
-        timeit('DEBUG: tokenize started')
+        # timeit('DEBUG: tokenize started')
 
-        # tokens = lexer.tokenize(stream)
+        tokens = lexer.tokenize(stream)
+
         # n = len(list(tokens))
-        for t in PdfTokens(stream):
-            print(t)
-        timeit('DEBUG: tokenize ended')
-        sys.exit()
+        # for t in PdfTokens(stream):
+        #     print(t)
+        # timeit('DEBUG: tokenize ended')
+        # sys.exit()
 
         if any((filterText, filterImages, filterVector)):
             tokens = PdfStream.filter_tokens(tokens = tokens,
