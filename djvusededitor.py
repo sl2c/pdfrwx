@@ -168,7 +168,7 @@ class DjVuSedEditor:
                     sx,sy = (x2-x1)/width,(y2-y1)/height
 
                 # Set up a font to be used for the OCR layer
-                font.install(pdfPage,'OCR', overwrite=True)
+                font.install(pdfPage, PdfName('OCR'), overwrite=True)
 
                 # Write the geometry part of the OCR PDF stream header; account for pdf page rotations
                 # TEST THIS MORE !!!!

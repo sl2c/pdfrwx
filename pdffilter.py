@@ -423,7 +423,7 @@ class PdfFilter:
     @staticmethod
     def lzw_decode(byteString:bytes, earlyChange = 1):
         '''
-        Decodes an LZW-encoded byteString into a generator of bytes (See TIFF Rev. 6.0 & Adobe PDF Ref.)
+        Decodes an LZW-encoded `byteString` into a generator of bytes (See TIFF Rev. 6.0 & Adobe PDF Ref.)
         '''        
         # The initial table
         table = [bytes([i]) for i in range(256)] + [b''] * (4096 - 256)
@@ -437,8 +437,9 @@ class PdfFilter:
 
         for byte in byteString:
 
-            assert 9 <= codeBits <= 12
-            assert L < 4096
+            if not (9 <= codeBits <= 12 and L <= 4096):
+                warn(f'decoding error, stream truncated')
+                return
 
             # Get the code
             chunk = (chunk << 8) + byte
@@ -468,15 +469,20 @@ class PdfFilter:
                     if string:
                         table[L] = string + entry[:1]
                         L += 1
-                        if L >= maxSize or L + earlyChange >= maxSize and codeBits < 12:
-                            codeBits += 1; maxSize *= 2
+
+                        if codeBits < 12 and L >= maxSize - earlyChange:
+                            codeBits += 1
+                            maxSize <<= 1
+
                 else:
                     assert string
                     entry = string + string[:1]
                     table[L] = entry
                     L += 1
-                    if L >= maxSize or L + earlyChange >= maxSize and codeBits < 12:
-                        codeBits += 1; maxSize *= 2
+
+                    if codeBits < 12 and L >= maxSize - earlyChange:
+                        codeBits += 1
+                        maxSize <<= 1
 
                 yield entry
                 string = entry

@@ -6,6 +6,9 @@
 # https://github.com/homm/
 # https://twitter.com/wouldntfix
 
+# ToDO:
+# Rewrite the numpy code using Halide
+
 from pdfrw import PdfWriter, PdfObject, PdfName, PdfArray, PdfDict, IndirectPdfDict
 from pdfrw import py23_diffs # Ugly, but necessary: https://github.com/pmaupin/pdfrw/issues/161
 
@@ -1047,9 +1050,7 @@ class PdfImage(AttrDict):
 
                 # alpha.render()
                 assert alpha.get_cpp() == 1
-                print('DEBUG:', alpha.get_mode())
                 alpha.change_mode('RGB' if alpha.get_mode() != '1' else 'L', intent)
-                print('DEBUG:', alpha.get_mode())
                 alpha_pil = alpha.get_pil()
 
                 # invert bitonal masks
@@ -2024,6 +2025,7 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options):
     '''
 
     MODIFIED = False
+    PROCESS_SMASK = False
 
     image = PdfImage(obj = image_obj)
 
@@ -2045,9 +2047,6 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options):
         msg(f'subsampling /{N}')
         image.set_array(a[::N, ::N])
         MODIFIED = True
-        if image.SMask:
-            msg('subsampling SMask')
-            modify_image_xobject(image.SMask, pdfPage, options)
 
     if image.bpc == 1:
 
@@ -2107,9 +2106,7 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options):
             msg(f'upsampling: alpha = {options.alpha}, bounds = {options.bounds}')
             image.set_array(SImage.superResolution(a, alpha = options.alpha, bounds = options.bounds))
             MODIFIED = True
-            if image.SMask:
-                msg('upsampling SMask')
-                modify_image_xobject(image.SMask, pdfPage, options)
+            PROCESS_SMASK = True
 
         # resample
         if options.resample and (options.resample >= 1 or bigEnough):
@@ -2120,9 +2117,9 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options):
             msg(f'resampling: factor = {f}, method = bicubic')
             image.set_array(SImage.resize(a, int(image.w() * f), int(image.h() * f), method = options.method))
             MODIFIED = True
-            if image.SMask:
-                msg('resampling SMask')
-                modify_image_xobject(image.SMask, pdfPage, options)
+            # Downsampling masks makes little sense: gains a few bytes, but degrades quality
+            if options.upsample > 1:
+                PROCESS_SMASK = True
 
         # bitonal
         if options.bitonal and image.get_mode() != '1':
@@ -2137,9 +2134,10 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options):
 
     # zip
     if options.zip and image.bpc != 1:
-        msg(f'converting to zip')
+        msg(f'converting image to zip')
         image.set_array(image.get_array())
         MODIFIED = True
+        PROCESS_SMASK = True
 
     if MODIFIED or options.colorspace and image.ColorSpace != image_obj.ColorSpace:
     
@@ -2153,6 +2151,11 @@ def modify_image_xobject(image_obj:IndirectPdfDict, pdfPage:PdfDict, options):
         image_obj.Decode = obj.Decode
         image_obj.Width = obj.Width
         image_obj.Height = obj.Height
+
+    if image_obj.SMask and PROCESS_SMASK:
+        msg('< processing SMask started')
+        MODIFIED |= modify_image_xobject(image_obj.SMask, pdfPage, options)
+        msg('> processing SMask ended')
 
     return MODIFIED
  
@@ -2307,7 +2310,7 @@ if __name__ == '__main__':
 
             images = {name+f'_{id(obj)}':obj for name, obj in objects 
                         if isinstance(obj, PdfDict) and obj.Subtype == PdfName.Image 
-                        and name not in [PdfName.Mask, PdfName.SMask]}
+                        and name not in ['/Mask', '/SMask']}
 
 
             # print(page)
@@ -2424,7 +2427,6 @@ if __name__ == '__main__':
                     image = PdfImage(obj=obj)
                     if options.dpi:
                         image.dpi = (options.dpi, options.dpi)
-                        print("DEBUG:", image.dpi)
                     stream, ext = image.saveAs('auto', render = True)
                     outputPath = fileBase  +f'.page{pageNo:04d}.image{n+1:04d}' + ext
                     open(outputPath, 'wb').write(stream)

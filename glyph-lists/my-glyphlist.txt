@@ -1106,6 +1106,7 @@ Zalt;2128
 llbracket;27E6
 rrbracket;27E7
 binampersand;0026
+mapsfromchar;27FB
 # ============================================== CharterITC
 v.var;0076
 i.othershort;0069
