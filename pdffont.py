@@ -517,7 +517,7 @@ class PdfFontEncoding:
         
         `PdfFontEncoding(encodingName)`
 
-        where `encodingName` is from `PdfFontEncoding.VECTORS.keys()`. For any
+        where `encodingName` is from `PdfFontEncoding._ENCODING_VECTORS.keys()`. For any
         encoding name that is not in `PdfFontEncoding.STANDARD`
         (the three standard PDF encodings),
         `self.Encoding` is set to a proper `PdfDict` representation
@@ -544,14 +544,14 @@ class PdfFontEncoding:
             # purely based on whether the font is symbolic or not, i.e. it does not depend
             # on whether the font program is embedded or not!
 
-            self.cc2g = {} if isSymbolic else PdfFontEncoding.VECTORS.get(PdfName('StandardEncoding'))
+            self.cc2g = {} if isSymbolic else PdfFontEncoding.get_cc2g(PdfName('StandardEncoding'))
             self.Encoding = None
             
         elif isinstance(Encoding, NAME_TYPE):
 
             # Encoding is a NAME_TYPE
 
-            self.cc2g = PdfFontEncoding.VECTORS.get(Encoding)
+            self.cc2g = PdfFontEncoding.get_cc2g(Encoding)
 
             if self.cc2g is None:
                 raise ValueError(f'bad encoding name: {Encoding}')
@@ -650,12 +650,23 @@ class PdfFontEncoding:
 
         return cc2g
 
+    # --------------------------------------------------------------------------- get_cc2g()
+
+    @staticmethod
+    def get_cc2g(encName:NAME_TYPE):
+        '''
+        Returns `PdfFontEncoding._ENCODING_VECTORS.get(encName).copy()` if `encName`
+        is in `PdfFontEncoding._ENCODING_VECTORS`, or `{}` otherwise.
+        '''
+        return None if encName not in PdfFontEncoding._ENCODING_VECTORS \
+                else PdfFontEncoding._ENCODING_VECTORS.get(encName).copy()
+
     # --------------------------------------------------------------------------- _init_vectors()
 
     @staticmethod
     def _init_vectors():
 
-        VECTORS = {}
+        VEC = {}
 
         ASCII_VEC = [
             'space','exclam','quotedbl','numbersign','dollar','percent','ampersand','quotesingle','parenleft','parenright','asterisk','plus','comma','hyphen','period','slash',
@@ -665,7 +676,7 @@ class PdfFontEncoding:
             'grave','a','b','c','d','e','f','g','h','i','j','k','l','m','n','o',
             'p','q','r','s','t','u','v','w','x','y','z','braceleft','bar','braceright','asciitilde',None]
 
-        VECTORS['/PDFDocEncoding'] = [None]*24 \
+        VEC['/PDFDocEncoding'] = [None]*24 \
         +  ['breve','caron','circumflex','dotaccent','hungarumlaut','ogonek','ring','tilde'] \
         +  ASCII_VEC \
         +  ['bullet','dagger','daggerdbl','ellipsis','emdash','endash','florin','fraction','guilsinglleft','guilsinglright','minus','perthousand','quotedblbase','quotedblleft','quotedblright','quoteleft',
@@ -677,17 +688,17 @@ class PdfFontEncoding:
             'agrave','aacute','acircumflex','atilde','adieresis','aring','ae','ccedilla','egrave','eacute','ecircumflex','edieresis','igrave','iacute','icircumflex','idieresis',
             'eth','ntilde','ograve','oacute','ocircumflex','otilde','odieresis','divide','oslash','ugrave','uacute','ucircumflex','udieresis','yacute','thorn','ydieresis']
 
-        VECTORS['/StandardEncoding'] = [None]*32 + ASCII_VEC + [None]*32 \
+        VEC['/StandardEncoding'] = [None]*32 + ASCII_VEC + [None]*32 \
         +  [None,'exclamdown','cent','sterling','fraction','yen','florin','section','currency','quotesingle','quotedblleft','guillemotleft','guilsinglleft','guilsinglright','fi','fl',
             None,'endash','dagger','daggerdbl','periodcentered',None,'paragraph','bullet','quotesinglbase','quotedblbase','quotedblright','guillemotright','ellipsis','perthousand',None,'questiondown',
             None,'grave','acute','circumflex','tilde','macron','breve','dotaccent','dieresis',None,'ring','cedilla',None,'hungarumlaut','ogonek','caron',
             'emdash',None,None,None,None,None,None,None,None,None,None,None,None,None,None,None,
             None,'AE',None,'ordfeminine',None,None,None,None,'Lslash','Oslash','OE','ordmasculine',None,None,None,None,
             None,'ae',None,None,None,'dotlessi',None,None,'lslash','oslash','oe','germandbls',None,None,None,None]
-        VECTORS['/StandardEncoding'][0x27] = 'quoteright'
-        VECTORS['/StandardEncoding'][0x60] = 'quoteleft'
+        VEC['/StandardEncoding'][0x27] = 'quoteright'
+        VEC['/StandardEncoding'][0x60] = 'quoteleft'
 
-        VECTORS['/WinAnsiEncoding'] = [None]*32 + ASCII_VEC \
+        VEC['/WinAnsiEncoding'] = [None]*32 + ASCII_VEC \
         +  ['Euro','bullet','quotesinglbase','florin','quotedblbase','ellipsis','dagger','daggerdbl','circumflex','perthousand','Scaron','guilsinglleft','OE','bullet','Zcaron','bullet',
             'bullet','quoteleft','quoteright','quotedblleft','quotedblright','bullet','endash','emdash','tilde','trademark','scaron','guilsinglright','oe','bullet','zcaron','Ydieresis',
             'space','exclamdown','cent','sterling','currency','yen','brokenbar','section','dieresis','copyright','ordfeminine','guillemotleft','logicalnot','hyphen','registered','macron',
@@ -696,9 +707,9 @@ class PdfFontEncoding:
             'Eth','Ntilde','Ograve','Oacute','Ocircumflex','Otilde','Odieresis','multiply','Oslash','Ugrave','Uacute','Ucircumflex','Udieresis','Yacute','Thorn','germandbls',
             'agrave','aacute','acircumflex','atilde','adieresis','aring','ae','ccedilla','egrave','eacute','ecircumflex','edieresis','igrave','iacute','icircumflex','idieresis',
             'eth','ntilde','ograve','oacute','ocircumflex','otilde','odieresis','divide','oslash','ugrave','uacute','ucircumflex','udieresis','yacute','thorn','ydieresis']
-        VECTORS['/WinAnsiEncoding'][0x7f] = 'bullet'
+        VEC['/WinAnsiEncoding'][0x7f] = 'bullet'
 
-        VECTORS['/MacRomanEncoding'] = [None]*32 + ASCII_VEC \
+        VEC['/MacRomanEncoding'] = [None]*32 + ASCII_VEC \
         +  ['Adieresis','Aring','Ccedilla','Eacute','Ntilde','Odieresis','Udieresis','aacute','agrave','acircumflex','adieresis','atilde','aring','ccedilla','eacute','egrave',
             'ecircumflex','edieresis','iacute','igrave','icircumflex','idieresis','ntilde','oacute','ograve','ocircumflex','odieresis','otilde','uacute','ugrave','ucircumflex','udieresis',
             'dagger','degree','cent','sterling','section','bullet','paragraph','germandbls','registered','copyright','trademark','acute','dieresis',None,'AE','Oslash',
@@ -709,13 +720,13 @@ class PdfFontEncoding:
             None,'Ograve','Uacute','Ucircumflex','Ugrave','dotlessi','circumflex','tilde','macron','breve','dotaccent','ring','cedilla','hungarumlaut','ogonek','caron']
 
         # PDF Ref. 1.7, page 431
-        VECTORS['/StandardRomanEncoding'] = VECTORS['/MacRomanEncoding'].copy()
+        VEC['/StandardRomanEncoding'] = VEC['/MacRomanEncoding'].copy()
         for k,v in zip((173,176,178,179,182,183,184,185,186,189,195,197,198,215,219,240),
                         ('notequal','infinity','lessequal','greaterequal','partialdiff','summation','product','pi',
                         'integral','Omega','radical','approxequal','Delta','lozenge','Euro','apple')):
-            VECTORS['/StandardRomanEncoding'][k] = v 
+            VEC['/StandardRomanEncoding'][k] = v 
 
-        VECTORS['/MacExpertEncoding'] = [None]*32 \
+        VEC['/MacExpertEncoding'] = [None]*32 \
         +  ['space','exclamsmall','Hungarumlautsmall','centoldstyle','dollaroldstyle','dollarsuperior','ampersandsmall','Acutesmall','parenleftsuperior','parenrightsuperior','twodotenleader','onedotenleader','comma','hyphen','period','fraction',
             'zerooldstyle','oneoldstyle','twooldstyle','threeoldstyle','fouroldstyle','fiveoldstyle','sixoldstyle','sevenoldstyle','eightoldstyle','nineoldstyle','colon','semicolon',None,'threequartersemdash',None,'questionsmall',
             None,None,None,None,'Ethsmall',None,None,'onequarter','onehalf','threequarters','oneeighth','threeeighths','fiveeighths','seveneighths','onethird','twothirds',
@@ -731,7 +742,7 @@ class PdfFontEncoding:
             'sevensuperior','ninesuperior','zerosuperior',None,'esuperior','rsuperior','tsuperior',None,None,'isuperior','ssuperior','dsuperior',None,None,None,None,
             None,'lsuperior','Ogoneksmall','Brevesmall','Macronsmall','bsuperior','nsuperior','msuperior','commasuperior','periodsuperior','Dotaccentsmall','Ringsmall',None,None,None,None]
 
-        VECTORS['/SymbolEncoding'] = [None]*32 \
+        VEC['/SymbolEncoding'] = [None]*32 \
         +  ['space','exclam','universal','numbersign','existential','percent','ampersand','suchthat','parenleft','parenright','asteriskmath','plus','comma','minus','period','slash',
             'zero','one','two','three','four','five','six','seven','eight','nine','colon','semicolon','less','equal','greater','question',
             'congruent','Alpha','Beta','Chi','Delta','Epsilon','Phi','Gamma','Eta','Iota','theta1','Kappa','Lambda','Mu','Nu','Omicron',
@@ -746,7 +757,7 @@ class PdfFontEncoding:
             'lozenge','angleleft','registersans','copyrightsans','trademarksans','summation','parenlefttp','parenleftex','parenleftbt','bracketlefttp','bracketleftex','bracketleftbt','bracelefttp','braceleftmid','braceleftbt','braceex',
             None,'angleright','integral','integraltp','integralex','integralbt','parenrighttp','parenrightex','parenrightbt','bracketrighttp','bracketrightex','bracketrightbt','bracerighttp','bracerightmid','bracerightbt',None]
 
-        VECTORS['/ZapfDingbatsEncoding'] = [None]*32 \
+        VEC['/ZapfDingbatsEncoding'] = [None]*32 \
         +  ['space','a1','a2','a202','a3','a4','a5','a119','a118','a117','a11','a12','a13','a14','a15','a16',
             'a105','a17','a18','a19','a20','a21','a22','a23','a24','a25','a26','a27','a28','a6','a7','a8',
             'a9','a10','a29','a30','a31','a32','a33','a34','a35','a36','a37','a38','a39','a40','a41','a42',
@@ -763,14 +774,14 @@ class PdfFontEncoding:
             None,'a201','a183','a184','a197','a185','a194','a198','a186','a195','a187','a188','a189','a190','a191',None]
 
         # Convert to a dict[str, str] format
-        for encName, encVector in VECTORS.items():
-            VECTORS[encName] = {chr(i):PdfName(encVector[i]) for i in range(256) if encVector[i] != None}
+        for encName, encVector in VEC.items():
+            VEC[encName] = {chr(i):PdfName(encVector[i]) for i in range(256) if encVector[i] != None}
 
-        return VECTORS
+        return VEC
 
     # --------------------------------------------------------------------------- VECTORS
 
-    VECTORS = _init_vectors()
+    _ENCODING_VECTORS = _init_vectors()
 
 # =========================================================================== class PdfFontGlyphMap
 
@@ -849,6 +860,10 @@ class PdfFontGlyphMap:
         # [A-Z]bb is a double-struck [A-Z], not a composite glyph name!
         if re.match(r'[A-Z]b{2,}', gname):
             return None
+
+        # Sometimes in the format xHH, where H is a hex digit, the first H is omitted 
+        if len(gname) == 2 and gname[0] == 'x' and gname[1] in '0123456789abcdef':
+            gname = 'x0' + gname[1]
 
         gname_marked = re.sub(r'^([a-zA-Z]|#|FLW|uni|cid|Char|char|glyph|MT|.*\.g)([0-9a-fA-F]{2}|[0-9]+)$',r'\1|||\2',gname)
         gname_split = re.split(r'\|\|\|',gname_marked)
@@ -3066,7 +3081,7 @@ class PdfFont:
 
         FontName = re.sub(r'\s+', '', self.info['FontName'])
 
-        if self.ttf or self.otf:
+        if self.prog.ttf or self.prog.otf:
             randomPrefix = ''.join(random.choice(string.ascii_uppercase) for _ in range(6))
             FontName = randomPrefix + '+' + FontName
 
